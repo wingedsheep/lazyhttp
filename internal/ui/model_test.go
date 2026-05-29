@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -58,6 +59,50 @@ func TestRequestPreviewToggle(t *testing.T) {
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
 	if !strings.Contains(model.View(), bodyMarker) {
 		t.Error("request body should appear after pressing i")
+	}
+}
+
+// TestEnvNoticeMissing verifies that requesting --env against a plan with no env
+// file surfaces a diagnostic (rather than running silently with literal {{vars}})
+// and that pressing E with no environments explains where discovery looked.
+func TestEnvNoticeMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.http")
+	if err := os.WriteFile(path, []byte("GET https://example.com/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(path, "ecc-test")
+	if m.loadErr != nil {
+		t.Fatalf("load error: %v", m.loadErr)
+	}
+	// A requested-but-unavailable env must produce a load-time notice naming it.
+	if !strings.Contains(m.notice, "ecc-test") {
+		t.Errorf("notice = %q, want it to mention the requested env", m.notice)
+	}
+
+	var model tea.Model = m
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	if !strings.Contains(model.View(), "ecc-test") {
+		t.Error("view should render the env notice")
+	}
+
+	// E with no environments explains discovery instead of opening an empty modal.
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'E'}})
+	got := model.(Model)
+	if got.envPicking {
+		t.Error("E should not open the picker when there are no environments")
+	}
+	if !strings.Contains(got.notice, "no environments") || !strings.Contains(got.View(), "no environments") {
+		t.Errorf("notice = %q, want it to explain where discovery searched", got.notice)
+	}
+}
+
+// TestEnvNoticeClearsWhenResolved verifies a valid --env produces no notice.
+func TestEnvNoticeClearsWhenResolved(t *testing.T) {
+	m := New(filepath.Join("..", "..", "example.http"), "dev")
+	if m.notice != "" {
+		t.Errorf("notice = %q, want empty for a resolved env", m.notice)
 	}
 }
 

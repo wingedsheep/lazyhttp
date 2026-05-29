@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -61,9 +62,17 @@ type Model struct {
 	// envNames lists the environments declared in http-client.env.json (sorted);
 	// envPicking is true while the env picker overlay is open and envCursor marks
 	// the highlighted entry. Switching env reloads the plan against the new vars.
+	// envDisc holds the full discovery outcome (searched dirs, file, parse error)
+	// so the UI can explain an empty list instead of no-op'ing.
 	envNames   []string
+	envDisc    httpfile.EnvDiscovery
 	envPicking bool
 	envCursor  int
+
+	// notice is a transient one-line diagnostic shown above the footer — used to
+	// explain env discovery (empty list, parse error, an unresolved --env). It is
+	// recomputed on every (re)load and may be overwritten by a key action (E).
+	notice string
 
 	// runFrom >= 0 means a "run from here" chain is active; it stops on the
 	// first failure or the end of the plan.
@@ -144,11 +153,12 @@ func (m *Model) cycleTheme() {
 
 // load (re)reads and parses the plan, resetting results.
 func (m *Model) load() {
-	// The env list drives the picker; ignore errors here so a malformed env
-	// file still surfaces through runner.Load below rather than blanking the list.
-	if names, err := httpfile.LoadEnvNames(m.path); err == nil {
-		m.envNames = names
-	}
+	// Discover environments up front, keeping the full outcome (not just the
+	// names): a parse error or an empty result is then explained to the user via
+	// the notice line rather than silently leaving the picker blank.
+	m.envDisc = httpfile.DiscoverEnv(m.path)
+	m.envNames = m.envDisc.Names
+	m.notice = m.envNotice()
 	p, err := runner.Load(m.path, m.envName)
 	if err != nil {
 		m.loadErr = err
@@ -161,6 +171,28 @@ func (m *Model) load() {
 	if m.cursor >= len(p.Steps) {
 		m.cursor = max(0, len(p.Steps)-1)
 	}
+	// The notice occupies a footer row; re-lay so the panes don't overflow the
+	// terminal (a no-op before the first WindowSizeMsg, when width is still 0).
+	m.layout()
+}
+
+// envNotice builds the load-time diagnostic for the env line: a parse error
+// (worth surfacing whether or not an env was requested), or a requested --env
+// that isn't available — naming the alternatives, or explaining where discovery
+// looked when none turned up. It returns "" when there's nothing to report.
+func (m Model) envNotice() string {
+	if m.envDisc.Err != nil {
+		return m.envDisc.Summary()
+	}
+	if m.envName == "" || contains(m.envNames, m.envName) {
+		return "" // no env requested, or the requested one resolved
+	}
+	if len(m.envNames) == 0 {
+		// Nothing to fall back to — name the requested env, then say why discovery
+		// came up empty (search path, or a parse error).
+		return fmt.Sprintf("env %q unavailable: %s", m.envName, m.envDisc.Summary())
+	}
+	return fmt.Sprintf("env %q not found — available: %s", m.envName, strings.Join(m.envNames, ", "))
 }
 
 // Init starts idle: the spinner only ticks once a step is running (see run),
@@ -321,11 +353,14 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, m.keys.Env):
-		// Open the picker only when there's something to choose from; with no
-		// env file the key is a no-op rather than an empty modal.
+		// Open the picker when there's something to choose from; with no env file
+		// explain why (where we searched, or the parse error) instead of no-op'ing.
 		if len(m.envNames) > 0 {
 			m.envPicking = true
 			m.envCursor = indexOf(m.envOptions(), m.envName)
+		} else {
+			m.notice = m.envDisc.Summary()
+			m.layout()
 		}
 		return m, nil
 	}
@@ -449,6 +484,16 @@ func (m Model) envKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // environment, so the user can fall back to inline-only variables.
 func (m Model) envOptions() []string {
 	return append([]string{""}, m.envNames...)
+}
+
+// contains reports whether s is one of names.
+func contains(names []string, s string) bool {
+	for _, n := range names {
+		if n == s {
+			return true
+		}
+	}
+	return false
 }
 
 // indexOf returns the position of s in names, or 0 when it isn't present so the

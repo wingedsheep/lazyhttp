@@ -21,6 +21,9 @@ func (m *Model) layout() {
 	}
 	m.help.Width = m.width
 	footerH := strings.Count(m.help.View(m.keys), "\n") + 1
+	if m.notice != "" {
+		footerH++ // the notice line sits above the help footer
+	}
 
 	// Content height inside the pane borders.
 	contentH := m.height - 1 /*title*/ - footerH - 2 /*pane borders*/
@@ -86,8 +89,18 @@ func (m Model) View() string {
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, result)
 	footer := m.help.View(m.keys)
+	if m.notice != "" {
+		footer = m.noticeLine() + "\n" + footer
+	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, m.statusBar(), body, footer)
+}
+
+// noticeLine renders the transient diagnostic above the footer in the warning
+// colour, truncated so it never wraps and pushes the status bar off-screen.
+func (m Model) noticeLine() string {
+	return lipgloss.NewStyle().Foreground(palette.warning).
+		Render(truncate("⚠ "+m.notice, m.width))
 }
 
 // renderEnvPicker draws the modal environment chooser: a titled, bordered box

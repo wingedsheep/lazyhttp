@@ -2,6 +2,7 @@ package httpfile
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -40,6 +41,15 @@ const (
 // repo boundary — so it can't escape the project, and at the filesystem root. An
 // empty result means no env file was found.
 func findEnvDir(planPath string) string {
+	dir, _ := findEnvDirTrace(planPath)
+	return dir
+}
+
+// findEnvDirTrace is findEnvDir that also reports every directory it inspected,
+// in walk order, so callers can tell the user where lazyhttp looked when the
+// search comes up empty. The returned directory is "" when no env file was
+// found; searched is non-empty regardless.
+func findEnvDirTrace(planPath string) (dir string, searched []string) {
 	// Absolutize first: a bare filename ("plan.http") has dir ".", and
 	// filepath.Dir(".") == ".", so the walk would terminate on its first
 	// iteration and never reach the real ancestor directories. Resolving against
@@ -47,22 +57,23 @@ func findEnvDir(planPath string) string {
 	if abs, err := filepath.Abs(planPath); err == nil {
 		planPath = abs
 	}
-	dir := filepath.Dir(planPath)
+	dir = filepath.Dir(planPath)
 	for {
+		searched = append(searched, dir)
 		for _, name := range []string{envFileName, privateEnvFileName} {
 			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-				return dir
+				return dir, searched
 			}
 		}
 		// The repo root (the directory containing .git) is the boundary: having
 		// checked it for env files above, don't climb past it into unrelated
 		// parent directories.
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return ""
+			return "", searched
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "" // reached the filesystem root
+			return "", searched // reached the filesystem root
 		}
 		dir = parent
 	}
@@ -228,6 +239,73 @@ func LoadEnvNames(planPath string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// EnvDiscovery records the outcome of looking for a plan's environment file:
+// the directories searched (in walk order), the env file found (if any), the
+// environment names it declares, and any read/parse error. It lets the UI
+// explain *why* the env list is empty — wrong directory, no file in the tree, a
+// malformed file, or a file with no environments — instead of failing silently.
+type EnvDiscovery struct {
+	Names    []string // environment names declared, sorted; empty if none resolved
+	File     string   // the env file that anchored discovery, "" if none was found
+	Searched []string // directories walked while looking for a file, in order
+	Err      error    // a read/parse error, when a file was found but couldn't be used
+}
+
+// DiscoverEnv runs environment discovery for a plan and reports the full
+// outcome. Unlike LoadEnvNames, a malformed or unreadable file is reported in
+// Err (with Names left empty) rather than discarded, so the caller can surface
+// it. A missing file is not an error — it leaves Names empty and File "".
+func DiscoverEnv(planPath string) EnvDiscovery {
+	dir, searched := findEnvDirTrace(planPath)
+	d := EnvDiscovery{Searched: searched}
+	if dir == "" {
+		return d
+	}
+	// Name whichever file anchored the directory (shared preferred) for the
+	// diagnostic; both may exist, but the shared file is the one users reach for.
+	for _, name := range []string{envFileName, privateEnvFileName} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			d.File = filepath.Join(dir, name)
+			break
+		}
+	}
+	envs, err := loadEnvFile(planPath)
+	if err != nil {
+		d.Err = err
+		return d
+	}
+	names := make([]string, 0, len(envs))
+	for name := range envs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	d.Names = names
+	return d
+}
+
+// Summary returns a one-line, human-readable explanation of why discovery
+// yielded no environments — surfacing a parse error, naming a file that
+// declared none, or reporting the span of directories searched in vain. It
+// returns "" when environments were found, so a non-empty result reads as
+// "there is something to report".
+func (d EnvDiscovery) Summary() string {
+	switch {
+	case len(d.Names) > 0:
+		return ""
+	case d.Err != nil:
+		return "env file error: " + d.Err.Error()
+	case d.File != "":
+		return "no environments declared in " + d.File
+	case len(d.Searched) == 0:
+		return "no environments found"
+	case len(d.Searched) == 1:
+		return fmt.Sprintf("no environments — searched %s for %s", d.Searched[0], envFileName)
+	default:
+		return fmt.Sprintf("no environments — searched %s … %s for %s",
+			d.Searched[0], d.Searched[len(d.Searched)-1], envFileName)
+	}
 }
 
 // Expand replaces every {{var}} in s with its resolved value. Unknown variables

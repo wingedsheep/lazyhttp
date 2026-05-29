@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -208,6 +209,79 @@ func TestLoadEnvNamesPrivateOnly(t *testing.T) {
 	}
 	if want := []string{"local"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// TestDiscoverEnvFound verifies discovery reports the names, the file that
+// supplied them, and that Summary stays empty when environments resolved.
+func TestDiscoverEnvFound(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "http-client.env.json")
+	if err := os.WriteFile(file, []byte(`{"prod": {"host": "h"}, "dev": {"host": "h"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := DiscoverEnv(filepath.Join(dir, "plan.http"))
+	if want := []string{"dev", "prod"}; !reflect.DeepEqual(d.Names, want) {
+		t.Errorf("Names = %v, want %v", d.Names, want)
+	}
+	if d.File != file {
+		t.Errorf("File = %q, want %q", d.File, file)
+	}
+	if s := d.Summary(); s != "" {
+		t.Errorf("Summary = %q, want empty when envs were found", s)
+	}
+}
+
+// TestDiscoverEnvMissing verifies a missing file is not an error, leaves File
+// empty, and produces a Summary naming the directories searched.
+func TestDiscoverEnvMissing(t *testing.T) {
+	dir := t.TempDir()
+	d := DiscoverEnv(filepath.Join(dir, "plan.http"))
+	if d.Err != nil {
+		t.Fatalf("Err = %v, want nil for a missing file", d.Err)
+	}
+	if len(d.Names) != 0 || d.File != "" {
+		t.Errorf("Names=%v File=%q, want empty", d.Names, d.File)
+	}
+	if len(d.Searched) == 0 {
+		t.Fatal("Searched is empty, want the directories walked")
+	}
+	if s := d.Summary(); !strings.Contains(s, "no environments") || !strings.Contains(s, "http-client.env.json") {
+		t.Errorf("Summary = %q, want a 'no environments … http-client.env.json' diagnostic", s)
+	}
+}
+
+// TestDiscoverEnvParseError verifies a malformed file is reported in Err (not
+// discarded), with Summary surfacing it rather than a misleading "not found".
+func TestDiscoverEnvParseError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "http-client.env.json"), []byte(`{not json`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := DiscoverEnv(filepath.Join(dir, "plan.http"))
+	if d.Err == nil {
+		t.Fatal("Err = nil, want a parse error")
+	}
+	if s := d.Summary(); !strings.Contains(s, "env file error") {
+		t.Errorf("Summary = %q, want it to surface the parse error", s)
+	}
+}
+
+// TestDiscoverEnvEmptyFile verifies a well-formed file declaring no environments
+// is distinguished from a missing one: Summary names the file rather than the
+// search path.
+func TestDiscoverEnvEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "http-client.env.json")
+	if err := os.WriteFile(file, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := DiscoverEnv(filepath.Join(dir, "plan.http"))
+	if len(d.Names) != 0 {
+		t.Errorf("Names = %v, want none", d.Names)
+	}
+	if s := d.Summary(); !strings.Contains(s, "declared in") || !strings.Contains(s, file) {
+		t.Errorf("Summary = %q, want it to name the empty file %q", s, file)
 	}
 }
 
