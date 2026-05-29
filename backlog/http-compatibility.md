@@ -157,9 +157,13 @@ These are real but higher-effort; capture them so they aren't rediscovered.
   `name.response.body.<path>` / `name.response.headers.<Name>` onto a `capture.Eval`
   expression against the named step's most recent result. `# @capture` still covers
   the same need and reads better in long chains.
-- **`$dotenv` / `$shared` / `http-client.private.env.json`.** Extend `vars.go`
-  loading: read a sibling `.env`, merge `$shared` into every env, and layer the
-  private env file over `http-client.env.json`.
+- **`http-client.private.env.json`** — ✅ shipped. `loadEnvFile` (`vars.go`)
+  finds the env directory by walking up parent dirs (stopping at the `.git`
+  boundary), then layers the private file over the shared one per-variable via
+  `mergeEnvs`, so secrets like `clientSecret` resolve while a shared `Security`
+  block stays intact.
+- **`$dotenv` / `$shared`.** Still pending. Extend `vars.go` loading: read a
+  sibling `.env`, and merge a `$shared` pseudo-environment into every env.
 - **Multipart / form-data file parts.** Parse `multipart/form-data` bodies and
   stream `< ./file` parts via `mime/multipart` in `runHTTP`. Meaningful parser +
   executor work.

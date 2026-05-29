@@ -22,15 +22,52 @@ var varPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
 // .http file (@name = value) layered over values from an environment file.
 type Vars map[string]string
 
-// loadEnvFile reads and parses the http-client.env.json sitting next to the
-// plan into a per-environment map of raw JSON values. Values are left raw
-// (rather than decoded to strings) so a nested object — notably the IntelliJ
-// `Security` block carrying OAuth2 configurations — doesn't break decoding the
-// way a flat `map[string]string` would. A missing file yields a nil map (not an
-// error) so a plan without environments simply has none.
-func loadEnvFile(planPath string) (map[string]map[string]json.RawMessage, error) {
-	envPath := filepath.Join(filepath.Dir(planPath), "http-client.env.json")
-	data, err := os.ReadFile(envPath)
+// The IntelliJ/VS Code environment files looked up alongside (and above) a
+// plan. The private file holds secrets (kept out of version control) and is
+// layered over the shared file, matching IntelliJ HTTP Client and VS Code REST
+// Client.
+const (
+	envFileName        = "http-client.env.json"
+	privateEnvFileName = "http-client.private.env.json"
+)
+
+// findEnvDir locates the directory supplying a plan's environments by walking up
+// from the plan's own directory through its ancestors, returning the first
+// directory that holds a shared or private env file. This mirrors IntelliJ HTTP
+// Client and VS Code REST Client, which let a repo keep its env files at a
+// common root (typically an http/ directory) while plans live in subfolders.
+// The walk stops once it has inspected the directory holding a .git entry — the
+// repo boundary — so it can't escape the project, and at the filesystem root. An
+// empty result means no env file was found.
+func findEnvDir(planPath string) string {
+	dir := filepath.Dir(planPath)
+	for {
+		for _, name := range []string{envFileName, privateEnvFileName} {
+			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				return dir
+			}
+		}
+		// The repo root (the directory containing .git) is the boundary: having
+		// checked it for env files above, don't climb past it into unrelated
+		// parent directories.
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return ""
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "" // reached the filesystem root
+		}
+		dir = parent
+	}
+}
+
+// readEnvFile reads and parses one http-client.env.json-style file into a
+// per-environment map of raw JSON values. Values are left raw (rather than
+// decoded to strings) so a nested object — notably the IntelliJ `Security` block
+// carrying OAuth2 configurations — doesn't break decoding the way a flat
+// `map[string]string` would. A missing file yields a nil map (not an error).
+func readEnvFile(path string) (map[string]map[string]json.RawMessage, error) {
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -41,6 +78,51 @@ func loadEnvFile(planPath string) (map[string]map[string]json.RawMessage, error)
 	if err := json.Unmarshal(data, &envs); err != nil {
 		return nil, err
 	}
+	return envs, nil
+}
+
+// mergeEnvs overlays the private env sets onto the shared ones: for every
+// environment in private, its variables override (or add to) the shared
+// environment of the same name. Environments unique to either side are kept. The
+// overlay is per-variable, so a private file supplying only secrets (e.g.
+// clientSecret, admin_password) leaves the rest of the shared environment — and
+// its Security block — intact. shared must be non-nil.
+func mergeEnvs(shared, private map[string]map[string]json.RawMessage) {
+	for env, vars := range private {
+		if shared[env] == nil {
+			shared[env] = make(map[string]json.RawMessage, len(vars))
+		}
+		for k, v := range vars {
+			shared[env][k] = v
+		}
+	}
+}
+
+// loadEnvFile reads the nearest http-client.env.json — searched in the plan's
+// own directory and, failing that, its ancestors (see findEnvDir) — and layers a
+// http-client.private.env.json from the same directory over it (see mergeEnvs).
+// A missing file yields a nil map (not an error) so a plan without environments
+// simply has none.
+func loadEnvFile(planPath string) (map[string]map[string]json.RawMessage, error) {
+	dir := findEnvDir(planPath)
+	if dir == "" {
+		return nil, nil
+	}
+	envs, err := readEnvFile(filepath.Join(dir, envFileName))
+	if err != nil {
+		return nil, err
+	}
+	private, err := readEnvFile(filepath.Join(dir, privateEnvFileName))
+	if err != nil {
+		return nil, err
+	}
+	if len(private) == 0 {
+		return envs, nil
+	}
+	if envs == nil {
+		envs = make(map[string]map[string]json.RawMessage, len(private))
+	}
+	mergeEnvs(envs, private)
 	return envs, nil
 }
 

@@ -38,6 +38,154 @@ func TestLoadEnvNamesMissingFile(t *testing.T) {
 	}
 }
 
+// TestLoadEnvNamesAncestor verifies the env file is discovered by walking up
+// from the plan's directory: a shared http-client.env.json at a common root is
+// found by a plan nested in a subfolder, matching IntelliJ/VS Code.
+func TestLoadEnvNamesAncestor(t *testing.T) {
+	root := t.TempDir()
+	env := `{"prod": {"host": "h"}, "dev": {"host": "h"}}`
+	if err := os.WriteFile(filepath.Join(root, "http-client.env.json"), []byte(env), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "feature-x", "nested")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadEnvNames(filepath.Join(sub, "plan.http"))
+	if err != nil {
+		t.Fatalf("LoadEnvNames: %v", err)
+	}
+	want := []string{"dev", "prod"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// TestLoadEnvNamesClosestWins verifies the walk uses the nearest env file: a
+// subfolder's own http-client.env.json shadows an ancestor's rather than merging.
+func TestLoadEnvNamesClosestWins(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "http-client.env.json"), []byte(`{"shared": {"host": "h"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "feature-x")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "http-client.env.json"), []byte(`{"local": {"host": "h"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadEnvNames(filepath.Join(sub, "plan.http"))
+	if err != nil {
+		t.Fatalf("LoadEnvNames: %v", err)
+	}
+	if want := []string{"local"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v (closest file should win)", got, want)
+	}
+}
+
+// TestLoadEnvNamesGitBoundary verifies the walk stops at the repo root: an env
+// file above a .git directory is invisible, so the search can't escape the
+// project into unrelated parents.
+func TestLoadEnvNamesGitBoundary(t *testing.T) {
+	root := t.TempDir()
+	// Env file lives ABOVE the repo boundary and must not be found.
+	if err := os.WriteFile(filepath.Join(root, "http-client.env.json"), []byte(`{"outside": {"host": "h"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(root, "repo")
+	sub := filepath.Join(repo, "http", "feature-x")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadEnvNames(filepath.Join(sub, "plan.http"))
+	if err != nil {
+		t.Fatalf("LoadEnvNames: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %v, want none (walk must stop at the .git boundary)", got)
+	}
+}
+
+// TestLoadEnvPrivateOverlay verifies the private env file layers over the shared
+// one per-variable: a secret defined only in http-client.private.env.json
+// resolves, a shared value the private file overrides takes the private value,
+// and shared values the private file doesn't mention are untouched.
+func TestLoadEnvPrivateOverlay(t *testing.T) {
+	dir := t.TempDir()
+	shared := `{"dev": {"host": "https://api.dev", "token": "shared-token"}}`
+	private := `{"dev": {"token": "real-secret", "clientSecret": "s3cr3t"}}`
+	if err := os.WriteFile(filepath.Join(dir, "http-client.env.json"), []byte(shared), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "http-client.private.env.json"), []byte(private), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadEnv(filepath.Join(dir, "plan.http"), "dev")
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	want := Vars{"host": "https://api.dev", "token": "real-secret", "clientSecret": "s3cr3t"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("LoadEnv = %v, want %v", got, want)
+	}
+}
+
+// TestLoadEnvPrivateSecretWithSharedAuth verifies the canonical split: the
+// Security.Auth block lives in the shared file referencing {{clientSecret}}, the
+// secret itself lives in the private file. LoadAuth still finds the Security
+// block and LoadEnv supplies the secret to expand it.
+func TestLoadEnvPrivateSecretWithSharedAuth(t *testing.T) {
+	dir := t.TempDir()
+	shared := `{"dev": {"Security": {"Auth": {"api": {"Client Secret": "{{clientSecret}}"}}}}}`
+	private := `{"dev": {"clientSecret": "s3cr3t"}}`
+	if err := os.WriteFile(filepath.Join(dir, "http-client.env.json"), []byte(shared), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "http-client.private.env.json"), []byte(private), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan := filepath.Join(dir, "plan.http")
+
+	vars, err := LoadEnv(plan, "dev")
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	if vars["clientSecret"] != "s3cr3t" {
+		t.Errorf("clientSecret = %q, want %q", vars["clientSecret"], "s3cr3t")
+	}
+	auths, err := LoadAuth(plan, "dev")
+	if err != nil {
+		t.Fatalf("LoadAuth: %v", err)
+	}
+	if got := auths["api"].ClientSecret; got != "{{clientSecret}}" {
+		t.Errorf("ClientSecret placeholder = %q, want it preserved for expansion", got)
+	}
+}
+
+// TestLoadEnvNamesPrivateOnly verifies a private env file is discovered and its
+// environments offered even when no shared file sits beside it.
+func TestLoadEnvNamesPrivateOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "http-client.private.env.json"), []byte(`{"local": {"host": "h"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadEnvNames(filepath.Join(dir, "plan.http"))
+	if err != nil {
+		t.Fatalf("LoadEnvNames: %v", err)
+	}
+	if want := []string{"local"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
 // TestExpandFuncResolver verifies ExpandFunc consults the resolver first and,
 // when it declines (or is nil), falls back to the variable map — leaving unknown
 // placeholders untouched. The widened matcher must also carry JSON-path

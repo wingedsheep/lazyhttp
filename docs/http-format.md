@@ -186,8 +186,8 @@ literal, just like an unknown plain variable.
 
 ### Environment file
 
-A `http-client.env.json` sitting next to the plan maps environment names to
-variable sets; `--env NAME` picks one:
+A `http-client.env.json` maps environment names to variable sets; `--env NAME`
+picks one:
 
 ```json
 {
@@ -195,6 +195,32 @@ variable sets; `--env NAME` picks one:
   "staging": { "api": "https://api.restful-api.dev", "token": "s3cr3t-staging-token" }
 }
 ```
+
+lazyhttp finds the file by walking up from the plan's directory through its
+ancestors and using the first one it sees — so one shared env file at a repo
+root (e.g. an `http/` directory) serves plans grouped in subfolders, matching
+IntelliJ HTTP Client and VS Code REST Client. The nearest file wins; the search
+stops at the repository root (a directory containing `.git`) so it can't escape
+the project.
+
+#### Private environment file
+
+A `http-client.private.env.json` in the same directory is layered **over** the
+shared file, per variable. Keep secrets there (and out of version control) while
+the shared file holds the rest:
+
+```json
+// http-client.env.json  (committed)
+{ "dev": { "api": "https://api.dev", "token": "{{clientSecret}}" } }
+
+// http-client.private.env.json  (gitignored)
+{ "dev": { "clientSecret": "s3cr3t-real-value" } }
+```
+
+For environment `dev` the merged set is `api`, `token`, and `clientSecret`, with
+any key present in both taken from the private file. This also covers the
+`Security.Auth` pattern: declare the auth block (referencing `{{clientSecret}}`)
+in the shared file and put `clientSecret` in the private file.
 
 ### OAuth2 authentication
 
