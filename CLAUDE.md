@@ -51,6 +51,16 @@ The data flows in one direction: **parse → expand → execute → evaluate →
   `status`, `body`, `header.Name`, or a JSON path (`json.a.b[0].c`, `$.a`, or bare `a.b`).
   `Eval` is used for both captures (store into vars) and assertion left-hand sides.
 
+- **`internal/auth`** — the OAuth2 helper. Parses the env file's IntelliJ-style
+  `Security.Auth` blocks into `Config`s (via `httpfile.LoadAuth`); a `Resolver` then
+  substitutes `{{$auth.token("id")}}` / `{{$auth.idToken("id")}}` placeholders in a
+  step's URL/headers/body by fetching a token from the config's Token URL. A
+  thread-safe `Cache` reuses tokens until `expires_in` lapses. Only the Client
+  Credentials and Password grants are implemented (no browser round-trip). Wired in
+  off the UI thread through the `exec.AuthResolver` hook in `runHTTP`; `ui/model.go`
+  expands config values on the UI thread (so secrets resolve without racing the
+  request goroutine) then hands a `Resolver` to `exec.Run`.
+
 - **`internal/ui`** — the Bubble Tea root. `model.go` is the heart: it owns the parsed
   steps, per-step results, the cursor, and the **`vars` map** that accumulates captured
   values as steps run. `view.go` renders the two-pane layout, `styles.go`/`json.go` handle

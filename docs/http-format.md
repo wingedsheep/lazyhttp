@@ -152,6 +152,66 @@ variable sets; `--env NAME` picks one:
 }
 ```
 
+### OAuth2 authentication
+
+For APIs behind OAuth2, lazyhttp can fetch and attach a bearer token for you
+instead of you hand-rolling a login request and `@capture`-ing the token. It
+honors the IntelliJ HTTP Client's `Security.Auth` block in
+`http-client.env.json`:
+
+```json
+{
+  "dev": {
+    "api": "https://api.example.com",
+    "Security": {
+      "Auth": {
+        "demo": {
+          "Type": "OAuth2",
+          "Grant Type": "Client Credentials",
+          "Token URL": "https://id.example.com/oauth/token",
+          "Client ID": "demo-client",
+          "Client Secret": "{{$processEnv OAUTH_CLIENT_SECRET}}",
+          "Scope": "read",
+          "Client Credentials": "basic"
+        }
+      }
+    }
+  }
+}
+```
+
+Reference a configuration by id in a request and lazyhttp resolves it to a token:
+
+```http
+### Protected request
+GET {{api}}/me
+Authorization: Bearer {{$auth.token("demo")}}
+```
+
+- **`{{$auth.token("id")}}`** resolves to the configuration's access token;
+  **`{{$auth.idToken("id")}}`** resolves to its `id_token`. With exactly one
+  configuration defined you may drop the id: `{{$auth.token}}`.
+- **The token is fetched once and cached** for the rest of the session, honoring
+  the endpoint's `expires_in` (refetched a little early, and again once expired),
+  so a plan of twenty requests performs a single token fetch.
+- **Grant types:** `Client Credentials` and `Password` — the two that work
+  without a browser round-trip. The interactive grants (`Authorization Code`,
+  `Device Authorization`, `Implicit`) are **not** supported.
+- **Client authentication** follows `Client Credentials`: `"basic"` (HTTP Basic,
+  the default when a secret is present), `"in body"` (`client_id`/`client_secret`
+  in the form), or `"none"`. `Password` grant additionally reads `Username` and
+  `Password`.
+- **Secrets stay out of the plan.** Configuration values expand `{{vars}}` and
+  dynamic variables, so a secret can come from `{{$processEnv VAR}}` or the env
+  file. The request preview (`i`) shows the literal `{{$auth.token(...)}}`
+  placeholder, never the resolved token.
+- The token fetch happens off the UI thread, so a slow token endpoint never
+  freezes the interface.
+
+> Like `@import`, this reuses the IntelliJ JSON shape, so a plan that uses
+> `{{$auth.token(...)}}` with a `Security.Auth` env block stays portable to the
+> IntelliJ HTTP Client. See [`example.oauth.http`](../example.oauth.http).
+
 ## Request body from a file
 
 Instead of an inline body, a step can load its request body from a file. The
@@ -275,9 +335,12 @@ Each entry lists the upstream syntax and what lazyhttp does with it today.
   with `< ./file` parts. The body text is sent as-is; file parts are not read or attached.
 - **GraphQL requests** — header `X-REQUEST-TYPE: GraphQL` followed by a query and
   variables. No special handling; sent as a plain body.
-- **Auth sugar** — `Authorization: Basic user pass`, `Digest`, `AWS`, Azure AD, OIDC.
+- **Auth sugar** — `Authorization: Basic user pass`, `Digest`, `AWS`, Azure AD.
   Sent verbatim — `Basic user pass` is not base64-encoded, so it goes on the wire
-  un-encoded. Pre-encode it yourself.
+  un-encoded. Pre-encode it yourself. (OAuth2 *is* supported via `Security.Auth` +
+  `{{$auth.token(...)}}` — see [OAuth2 authentication](#oauth2-authentication) —
+  but only the Client Credentials and Password grants; the interactive grants
+  that need a browser are not.)
 - **`//` comment/directive prefix** — `// @name Foo`.
   Not recognized; lazyhttp directives require a `#` prefix.
 - **Multi-line URLs** — continuation lines starting with `?` / `&`.

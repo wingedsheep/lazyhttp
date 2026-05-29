@@ -14,8 +14,11 @@ import (
 // httpClient is shared across requests; 30s is generous for a manual runner.
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
-// runHTTP builds and sends the request described by s.
-func runHTTP(index int, s step.Step) tea.Cmd {
+// runHTTP builds and sends the request described by s. When auth is non-nil it
+// first resolves any {{$auth.token(...)}} placeholders (fetching/caching a token
+// off the UI thread); a token failure fails the step like a transport error
+// rather than sending an unauthenticated request.
+func runHTTP(index int, s step.Step, auth AuthResolver) tea.Cmd {
 	return func() tea.Msg {
 		start := time.Now()
 		fail := func(err error) tea.Msg {
@@ -24,6 +27,12 @@ func runHTTP(index int, s step.Step) tea.Cmd {
 				Err:      err,
 				Duration: time.Since(start),
 			}}
+		}
+
+		if auth != nil {
+			if err := auth.Resolve(&s); err != nil {
+				return fail(err)
+			}
 		}
 
 		var bodyReader io.Reader

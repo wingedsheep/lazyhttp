@@ -2,6 +2,7 @@ package ui
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/wingedsheep/lazyhttp/internal/auth"
 	"github.com/wingedsheep/lazyhttp/internal/exec"
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
 	"github.com/wingedsheep/lazyhttp/internal/step"
@@ -249,6 +251,60 @@ func TestExpandBodyFromFile(t *testing.T) {
 	// A missing file surfaces as an error so the step can fail visibly.
 	if _, err := m.expand(step.Step{Kind: step.KindHTTP, BodyFile: "nope.json"}); err == nil {
 		t.Error("expected an error for a missing body file")
+	}
+}
+
+// TestAuthResolver verifies the UI builds an OAuth2 resolver only for steps that
+// reference {{$auth.token}}, expands config values (here a {{var}} client
+// secret) on the UI thread, and that the resulting resolver fetches and attaches
+// a token end-to-end.
+func TestAuthResolver(t *testing.T) {
+	var gotSecret string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotSecret = r.PostForm.Get("client_secret")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"access_token":"ABC","expires_in":3600}`))
+	}))
+	defer srv.Close()
+
+	m := Model{
+		vars:      httpfile.Vars{"secret": "sssh"},
+		authCache: auth.NewCache(),
+		authConfigs: map[string]auth.Config{
+			"demo": {
+				GrantType:         "Client Credentials",
+				TokenURL:          srv.URL,
+				ClientID:          "id",
+				ClientSecret:      "{{secret}}", // expanded on the UI thread
+				ClientCredentials: "in body",
+			},
+		},
+	}
+
+	// A step with no auth reference gets no resolver.
+	if r := m.authResolver(step.Step{URL: "http://x", Headers: map[string]string{}}); r != nil {
+		t.Error("expected nil resolver for a step without an $auth reference")
+	}
+
+	// A step that references the token gets a resolver that fetches and attaches it.
+	s := step.Step{
+		Kind:    step.KindHTTP,
+		URL:     "http://x",
+		Headers: map[string]string{"Authorization": `Bearer {{$auth.token("demo")}}`},
+	}
+	r := m.authResolver(s)
+	if r == nil {
+		t.Fatal("expected a resolver for a step referencing $auth.token")
+	}
+	if err := r.Resolve(&s); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if s.Headers["Authorization"] != "Bearer ABC" {
+		t.Errorf("token not attached, header = %q", s.Headers["Authorization"])
+	}
+	if gotSecret != "sssh" {
+		t.Errorf("client secret not expanded on the UI thread, server saw %q", gotSecret)
 	}
 }
 

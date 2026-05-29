@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/wingedsheep/lazyhttp/internal/auth"
 	"github.com/wingedsheep/lazyhttp/internal/capture"
 	"github.com/wingedsheep/lazyhttp/internal/exec"
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
@@ -68,6 +69,12 @@ type Model struct {
 	// baseVars is the env+inline snapshot used to drop captures on a reset.
 	vars     httpfile.Vars
 	baseVars httpfile.Vars
+
+	// authConfigs are the OAuth2 configurations from the environment's
+	// Security.Auth block; authCache holds tokens fetched from them, reused
+	// across steps until they expire. Both are rebuilt per load / env switch.
+	authConfigs map[string]auth.Config
+	authCache   *auth.Cache
 
 	// runFrom >= 0 means a "run from here" chain is active; it stops on the
 	// first failure or the end of the plan.
@@ -160,6 +167,12 @@ func (m *Model) load() {
 		m.loadErr = err
 		return
 	}
+	// OAuth2 configurations come from the same env file; a fresh token cache per
+	// load/env-switch means switching credentials never reuses a stale token.
+	// Errors here are non-fatal: a malformed Security block just disables auth.
+	m.authConfigs, _ = httpfile.LoadAuth(m.path, m.envName)
+	m.authCache = auth.NewCache()
+
 	m.loadErr = nil
 	m.vars = vars                // env + inline defs; captures layer on as steps run
 	m.baseVars = cloneVars(vars) // pristine copy to restore when state is reset
@@ -496,7 +509,7 @@ func (m *Model) run(i int) tea.Cmd {
 	// Snapshot the highlight palette on the UI thread so the off-thread
 	// highlighter can't race a theme switch that rebuilds jsonTheme.
 	st := jsonTheme
-	cmd := exec.Run(i, s, func(body string) string {
+	cmd := exec.Run(i, s, m.authResolver(s), func(body string) string {
 		return highlightJSON(body, st)
 	})
 	// Wake the spinner only if it isn't already animating, so a run-from-here
@@ -549,6 +562,42 @@ func (m Model) expand(s step.Step) (step.Step, error) {
 	}
 	s.Body = body
 	return s, nil
+}
+
+// authResolver returns an exec.AuthResolver for the expanded step s, or nil when
+// the step has no {{$auth.token(...)}} reference or no Security.Auth
+// configurations are defined. Configuration values are expanded here, on the UI
+// thread, so a client secret sourced from `{{$processEnv …}}` or another
+// variable is resolved against the live var set without racing the request
+// goroutine; only the token fetch itself runs off-thread.
+func (m Model) authResolver(s step.Step) exec.AuthResolver {
+	if len(m.authConfigs) == 0 {
+		return nil
+	}
+	referenced := auth.References(s.URL) || auth.References(s.Body)
+	for _, v := range s.Headers {
+		if referenced {
+			break
+		}
+		referenced = auth.References(v)
+	}
+	if !referenced {
+		return nil
+	}
+
+	expand := func(in string) string { return m.vars.ExpandFunc(in, m.resolveResponseRef) }
+	cfgs := make(map[string]auth.Config, len(m.authConfigs))
+	for id, c := range m.authConfigs {
+		c.TokenURL = expand(c.TokenURL)
+		c.AuthURL = expand(c.AuthURL)
+		c.ClientID = expand(c.ClientID)
+		c.ClientSecret = expand(c.ClientSecret)
+		c.Scope = expand(c.Scope)
+		c.Username = expand(c.Username)
+		c.Password = expand(c.Password)
+		cfgs[id] = c
+	}
+	return auth.NewResolver(cfgs, m.authCache)
 }
 
 // resolveResponseRef resolves an inline response reference — VS Code REST Client

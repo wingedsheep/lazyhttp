@@ -18,16 +18,25 @@ type ResultMsg struct {
 	Highlighted string
 }
 
-// Run dispatches a step to the appropriate runner. The work — the request (or
-// shell) and then highlighting the response body with highlight — all happens
-// off the UI thread inside the returned command, so the interface never blocks
-// even on a large response. highlight may be nil to skip highlighting.
-func Run(index int, s step.Step, highlight func(string) string) tea.Cmd {
-	inner := runHTTP
+// AuthResolver substitutes OAuth2 token placeholders in a step just before it
+// is sent. It is consulted off the UI thread (a token fetch is a network call),
+// so a slow token endpoint never blocks rendering. A nil resolver is a no-op.
+type AuthResolver interface {
+	Resolve(s *step.Step) error
+}
+
+// Run dispatches a step to the appropriate runner. The work — resolving any auth
+// token, the request (or shell), then highlighting the response body with
+// highlight — all happens off the UI thread inside the returned command, so the
+// interface never blocks even on a large response or a slow token endpoint.
+// auth may be nil (no OAuth2 helper); highlight may be nil to skip highlighting.
+func Run(index int, s step.Step, auth AuthResolver, highlight func(string) string) tea.Cmd {
+	var cmd tea.Cmd
 	if s.Kind == step.KindShell {
-		inner = runShell
+		cmd = runShell(index, s)
+	} else {
+		cmd = runHTTP(index, s, auth)
 	}
-	cmd := inner(index, s)
 	return func() tea.Msg {
 		msg := cmd().(ResultMsg)
 		if highlight != nil {

@@ -27,10 +27,23 @@ These build on the same code the rest of the backlog touches:
 
 ---
 
-## Feature A — OAuth2 / bearer-token auth helper
+## Feature A — OAuth2 / bearer-token auth helper — ✅ shipped in 0.8.0
 
 **Value:** very high — auth is the #1 reason people fall back to Postman.
 **Effort:** medium.
+
+> Shipped, but via the **native IntelliJ `Security.Auth` env format** rather than
+> a new `# @auth` directive (below): a request references a configuration with
+> `{{$auth.token("id")}}` / `{{$auth.idToken("id")}}`, keeping plans portable to
+> the IntelliJ HTTP Client and secrets in the (often git-ignored) env file.
+> Implemented in `internal/auth` (`Config`, a thread-safe expiry-honoring token
+> `Cache`, and a `Resolver`), parsed by `httpfile.LoadAuth`, and applied off the
+> UI thread via the new `exec.AuthResolver` hook in `runHTTP`. Grant types:
+> **Client Credentials** and **Password**; the interactive grants (point 4) are
+> still deferred. The `# @auth bearer/basic` directive sugar below was **not**
+> implemented — `Authorization: Bearer {{token}}` already covers bearer, and the
+> `Basic` base64 rewrite remains [compat Phase 3](./http-compatibility.md#phase-3--per-request-directives--basic-auth-encoding).
+> The original directive-based design is kept below for reference.
 
 Today `Authorization` is whatever literal string you type, and `Basic user pass`
 isn't even base64-encoded (a documented footgun; the fix is

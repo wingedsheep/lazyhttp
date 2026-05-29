@@ -1,0 +1,28 @@
+# OAuth2 helper tour — first-class token fetch + cache + auto-attach.
+#
+# Instead of hand-rolling a "login" request and `@capture`-ing the token into a
+# variable, lazyhttp can honor the IntelliJ HTTP Client's `Security.Auth` blocks
+# in http-client.env.json. Reference a configuration with {{$auth.token("id")}}
+# and lazyhttp fetches a token from its Token URL, caches it until it expires,
+# and reuses it across every request in the plan — one token fetch, not twenty.
+#
+# This file is also valid in the IntelliJ HTTP Client. To run it for real, point
+# the "demo" config in http-client.env.json at your own OAuth2 provider and
+# export the secret:  OAUTH_CLIENT_SECRET=… lazyhttp --env dev example.oauth.http
+#
+# Supported grant types: Client Credentials and Password (the two that work
+# without a browser round-trip). The config lives in the env file so secrets stay
+# out of the plan; the request preview (`i`) shows the {{$auth.token(...)}}
+# placeholder, never the resolved token.
+
+### Call a protected endpoint
+# @group OAuth2
+# @name Protected request
+GET {{api}}/products/1
+Authorization: Bearer {{$auth.token("demo")}}
+
+### Reuse the cached token — no second token fetch
+# @group OAuth2
+# @name Reuses cached token
+GET {{api}}/products/2
+Authorization: Bearer {{$auth.token("demo")}}

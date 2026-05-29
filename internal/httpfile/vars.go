@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/wingedsheep/lazyhttp/internal/auth"
 )
 
 // varPattern matches IntelliJ-style placeholders: plain {{host}}, dynamic
@@ -20,38 +22,13 @@ var varPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
 // .http file (@name = value) layered over values from an environment file.
 type Vars map[string]string
 
-// LoadEnv reads an IntelliJ-style http-client.env.json sitting next to the plan
-// and returns the variables for the named environment. A missing file or empty
-// env name yields an empty (but usable) set rather than an error.
-func LoadEnv(planPath, envName string) (Vars, error) {
-	v := Vars{}
-	if envName == "" {
-		return v, nil
-	}
-
-	envPath := filepath.Join(filepath.Dir(planPath), "http-client.env.json")
-	data, err := os.ReadFile(envPath)
-	if os.IsNotExist(err) {
-		return v, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	var envs map[string]map[string]string
-	if err := json.Unmarshal(data, &envs); err != nil {
-		return nil, err
-	}
-	for k, val := range envs[envName] {
-		v[k] = val
-	}
-	return v, nil
-}
-
-// LoadEnvNames returns the environment names declared in the http-client.env.json
-// sitting next to the plan, sorted alphabetically. A missing file yields an empty
-// slice (not an error) so a plan without environments simply has none to pick.
-func LoadEnvNames(planPath string) ([]string, error) {
+// loadEnvFile reads and parses the http-client.env.json sitting next to the
+// plan into a per-environment map of raw JSON values. Values are left raw
+// (rather than decoded to strings) so a nested object — notably the IntelliJ
+// `Security` block carrying OAuth2 configurations — doesn't break decoding the
+// way a flat `map[string]string` would. A missing file yields a nil map (not an
+// error) so a plan without environments simply has none.
+func loadEnvFile(planPath string) (map[string]map[string]json.RawMessage, error) {
 	envPath := filepath.Join(filepath.Dir(planPath), "http-client.env.json")
 	data, err := os.ReadFile(envPath)
 	if os.IsNotExist(err) {
@@ -60,9 +37,100 @@ func LoadEnvNames(planPath string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	var envs map[string]map[string]string
+	var envs map[string]map[string]json.RawMessage
 	if err := json.Unmarshal(data, &envs); err != nil {
+		return nil, err
+	}
+	return envs, nil
+}
+
+// LoadEnv reads an IntelliJ-style http-client.env.json sitting next to the plan
+// and returns the string variables for the named environment. Non-string values
+// (such as the `Security` OAuth2 block, consumed by LoadAuth) are skipped. A
+// missing file or empty env name yields an empty (but usable) set rather than an
+// error.
+func LoadEnv(planPath, envName string) (Vars, error) {
+	v := Vars{}
+	if envName == "" {
+		return v, nil
+	}
+	envs, err := loadEnvFile(planPath)
+	if err != nil {
+		return nil, err
+	}
+	for k, raw := range envs[envName] {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			v[k] = s
+		}
+	}
+	return v, nil
+}
+
+// LoadAuth reads the OAuth2 configurations from the named environment's
+// `Security.Auth` block in http-client.env.json. A missing file, env, or
+// Security block yields a nil map (not an error). Configuration values keep
+// their {{var}} placeholders for the caller to expand.
+func LoadAuth(planPath, envName string) (map[string]auth.Config, error) {
+	if envName == "" {
+		return nil, nil
+	}
+	envs, err := loadEnvFile(planPath)
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := envs[envName]["Security"]
+	if !ok {
+		return nil, nil
+	}
+	var sec struct {
+		Auth map[string]struct {
+			Type              string `json:"Type"`
+			GrantType         string `json:"Grant Type"`
+			TokenURL          string `json:"Token URL"`
+			AuthURL           string `json:"Auth URL"`
+			RedirectURL       string `json:"Redirect URL"`
+			ClientID          string `json:"Client ID"`
+			ClientSecret      string `json:"Client Secret"`
+			Scope             string `json:"Scope"`
+			Username          string `json:"Username"`
+			Password          string `json:"Password"`
+			ClientCredentials string `json:"Client Credentials"`
+			UseIDToken        bool   `json:"Use ID Token"`
+		} `json:"Auth"`
+	}
+	if err := json.Unmarshal(raw, &sec); err != nil {
+		return nil, err
+	}
+	if len(sec.Auth) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]auth.Config, len(sec.Auth))
+	for id, a := range sec.Auth {
+		out[id] = auth.Config{
+			Type:              a.Type,
+			GrantType:         a.GrantType,
+			TokenURL:          a.TokenURL,
+			AuthURL:           a.AuthURL,
+			RedirectURL:       a.RedirectURL,
+			ClientID:          a.ClientID,
+			ClientSecret:      a.ClientSecret,
+			Scope:             a.Scope,
+			Username:          a.Username,
+			Password:          a.Password,
+			ClientCredentials: a.ClientCredentials,
+			UseIDToken:        a.UseIDToken,
+		}
+	}
+	return out, nil
+}
+
+// LoadEnvNames returns the environment names declared in the http-client.env.json
+// sitting next to the plan, sorted alphabetically. A missing file yields an empty
+// slice (not an error) so a plan without environments simply has none to pick.
+func LoadEnvNames(planPath string) ([]string, error) {
+	envs, err := loadEnvFile(planPath)
+	if err != nil {
 		return nil, err
 	}
 	names := make([]string, 0, len(envs))
