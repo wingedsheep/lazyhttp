@@ -13,7 +13,18 @@ import (
 	"github.com/wingedsheep/lazyhttp/internal/ui"
 )
 
+// version is the build version, overridden at release time via
+// `-ldflags "-X main.version=..."` (see .goreleaser.yaml). Dev builds report "dev".
+var version = "dev"
+
 func main() {
+	// `lazyhttp version` / `--version` / `-v` reports the build version, so a user
+	// can confirm what they're running (and bug reports can cite it).
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Println("lazyhttp", version)
+		return
+	}
+
 	// `lazyhttp run <plan.http>` executes a plan headlessly with a CI-friendly
 	// exit code; bare `lazyhttp <plan.http>` keeps launching the TUI.
 	if len(os.Args) > 1 && os.Args[1] == "run" {
@@ -24,7 +35,8 @@ func main() {
 	theme := flag.String("theme", "", "colour theme: "+strings.Join(ui.ThemeNames(), ", ")+" (cycle with `t`)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: lazyhttp [--env NAME] [--theme NAME] <plan.http>   (open the TUI)\n")
-		fmt.Fprintf(os.Stderr, "       lazyhttp run [--env NAME] [--filter SUBSTR] <plan.http>   (headless, for CI)\n\n")
+		fmt.Fprintf(os.Stderr, "       lazyhttp run [--env NAME] [--filter SUBSTR] <plan.http>   (headless, for CI)\n")
+		fmt.Fprintf(os.Stderr, "       lazyhttp --version                                        (print version)\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()

@@ -17,7 +17,7 @@ Pick whichever fits the machine — all three give you a `lazyhttp` on your `PAT
 brew install wingedsheep/tap/lazyhttp
 ```
 
-Upgrade later with `brew upgrade lazyhttp`.
+Upgrade later with `brew update && brew upgrade --cask lazyhttp`.
 
 ### curl one-liner (macOS / Linux — no Go, no Homebrew)
 
@@ -189,9 +189,14 @@ full reference.
 
 ## Updating
 
-- Homebrew: `brew upgrade lazyhttp`
+- Homebrew: `brew update && brew upgrade --cask lazyhttp`
 - curl: re-run the install one-liner
 - Go: `go install github.com/wingedsheep/lazyhttp@latest`
+
+`brew upgrade` only re-checks taps once per `HOMEBREW_AUTO_UPDATE_SECS` (24h
+default), so run `brew update` first to pull the newest release immediately. If a
+stale local tap clone still hides it, `brew reinstall --cask lazyhttp` forces it.
+Check what you're on with `lazyhttp --version`.
 
 ## Building from source
 
