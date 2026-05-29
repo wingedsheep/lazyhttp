@@ -26,6 +26,14 @@ type Step struct {
 	URL      string            // HTTP only
 	Headers  map[string]string // HTTP only
 	Body     string            // HTTP request body, or the shell script
+
+	// BodyFile names a file whose contents are sent as the request body, from a
+	// `< path` / `<@ path` line; empty when the body is inline. BodyFileVars is
+	// true for the `<@` form, which expands {{vars}} in the file contents. The
+	// path is resolved relative to the plan file's directory at execution time.
+	BodyFile     string
+	BodyFileVars bool
+
 	Captures []Capture         // values to extract from the response
 	Asserts  []Assertion       // checks to run against the response
 	Reset    bool              // when this step succeeds, reset the rest of the plan

@@ -80,7 +80,16 @@ type Model struct {
 	width, height            int
 	listW, resultW, contentH int
 	loadErr                  error
+
+	// wheelAccum smooths the scroll wheel: terminals emit several wheel events
+	// per physical notch, so we accumulate them and only step the cursor once
+	// |wheelAccum| reaches wheelStep. This keeps list navigation precise.
+	wheelAccum int
 }
+
+// wheelStep is how many wheel events make up one cursor step. Most terminals
+// fire ~3 events per notch, so this maps roughly one notch to one step.
+const wheelStep = 3
 
 // New builds a Model by loading and parsing the plan at path with the named
 // environment (envName may be "").
@@ -208,9 +217,27 @@ func (m Model) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
-		m.moveCursor(-1)
+		if m.wheelAccum > 0 {
+			m.wheelAccum = 0 // direction flipped; drop leftover from the other way
+		}
+		m.wheelAccum--
 	case tea.MouseButtonWheelDown:
+		if m.wheelAccum < 0 {
+			m.wheelAccum = 0
+		}
+		m.wheelAccum++
+	default:
+		return m, nil
+	}
+	// Only step once a full notch's worth of events has accumulated, so a
+	// single physical scroll tick moves the cursor by one.
+	for m.wheelAccum <= -wheelStep {
+		m.moveCursor(-1)
+		m.wheelAccum += wheelStep
+	}
+	for m.wheelAccum >= wheelStep {
 		m.moveCursor(1)
+		m.wheelAccum -= wheelStep
 	}
 	return m, nil
 }
