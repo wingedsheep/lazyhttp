@@ -519,19 +519,21 @@ func (m *Model) run(i int) tea.Cmd {
 // silently sending an empty body. BodyFile is kept on the returned step (now
 // holding the var-expanded path) for the request preview.
 func (m Model) expand(s step.Step) (step.Step, error) {
-	s.URL = m.vars.Expand(s.URL)
+	expand := func(in string) string { return m.vars.ExpandFunc(in, m.resolveResponseRef) }
+
+	s.URL = expand(s.URL)
 	headers := make(map[string]string, len(s.Headers))
 	for k, v := range s.Headers {
-		headers[k] = m.vars.Expand(v)
+		headers[k] = expand(v)
 	}
 	s.Headers = headers
 
 	if s.BodyFile == "" {
-		s.Body = m.vars.Expand(s.Body)
+		s.Body = expand(s.Body)
 		return s, nil
 	}
 
-	path := m.vars.Expand(s.BodyFile)
+	path := expand(s.BodyFile)
 	s.BodyFile = path
 	full := path
 	if !filepath.IsAbs(full) {
@@ -543,10 +545,52 @@ func (m Model) expand(s step.Step) (step.Step, error) {
 	}
 	body := string(data)
 	if s.BodyFileVars {
-		body = m.vars.Expand(body)
+		body = expand(body)
 	}
 	s.Body = body
 	return s, nil
+}
+
+// resolveResponseRef resolves an inline response reference — VS Code REST Client
+// syntax such as {{login.response.body.$.token}} or
+// {{login.response.headers.Location}} — against the stored result of an earlier
+// named step. It maps the reference onto a capture expression and reuses
+// capture.Eval, so JSON paths and header lookups behave exactly as in
+// `# @capture`. ok is false for tokens that aren't response references, name an
+// unrun step, or can't be resolved, so Expand leaves them untouched.
+func (m Model) resolveResponseRef(token string) (string, bool) {
+	name, rest, ok := strings.Cut(token, ".response.")
+	if !ok {
+		return "", false
+	}
+	r, ok := m.lastResult(name)
+	if !ok {
+		return "", false
+	}
+	var expr string
+	switch {
+	case rest == "body" || rest == "body.*":
+		expr = "body"
+	case strings.HasPrefix(rest, "body."):
+		expr = strings.TrimPrefix(rest, "body.") // e.g. "$.token", "items[0].id"
+	case strings.HasPrefix(rest, "headers."):
+		expr = "header." + strings.TrimPrefix(rest, "headers.")
+	default:
+		return "", false
+	}
+	return capture.Eval(expr, r)
+}
+
+// lastResult returns the result of the most recently positioned step named name
+// that has already run. Scanning from the bottom means a reference picks up the
+// latest result when a name is reused across the plan.
+func (m Model) lastResult(name string) (step.Result, bool) {
+	for i := len(m.steps) - 1; i >= 0; i-- {
+		if m.steps[i].Name == name && i < len(m.results) && m.results[i].Status != step.Pending {
+			return m.results[i], true
+		}
+	}
+	return step.Result{}, false
 }
 
 // evaluate runs a finished step's captures and assertions, returning the result

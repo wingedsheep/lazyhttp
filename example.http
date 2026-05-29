@@ -68,8 +68,27 @@ Content-Type: application/json
   "password": "{{pass}}"
 }
 
-### Call a protected route with the captured token
-### Shows {{token}} expanding inside a Bearer header — value from the step above.
+### Reuse the login token with an inline response reference (VS Code syntax)
+### {{Log in.response.body.$.accessToken}} reads the access token straight out of
+### the "Log in" response directly above — the VS Code REST Client syntax.
+###
+### IMPORTANT: this reads "Log in"'s RESPONSE, so "Log in" must have already run in
+### this session. Run "Log in" first, or "run from here" (a) from the top. Run this
+### step on its own and the reference can't resolve — it stays literal as {{...}}
+### and the server returns 401. The {{token}} capture (next step) has the same
+### dependency. (VS Code needs a space-free @name to reference; lazyhttp accepts
+### either, so referencing "Log in" works here.)
+# @name Who am I (by response ref)
+# @assert status == 200
+# @assert json.username == emilys
+GET {{api}}/auth/me
+Authorization: Bearer {{Log in.response.body.$.accessToken}}
+Accept: application/json
+
+### The same call the idiomatic lazyhttp way — reuse the captured {{token}}
+### {{token}} was `# @capture`d on "Log in" above; it expands inside the Bearer
+### header here. `# @capture` is preferred in lazyhttp and reads better in long
+### chains — the response reference above exists for VS Code compatibility.
 # @name Who am I
 # @assert status == 200
 # @assert json.username == emilys

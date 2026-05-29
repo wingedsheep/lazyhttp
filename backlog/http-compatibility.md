@@ -150,10 +150,13 @@ design and remove two surprising behaviors.
 
 These are real but higher-effort; capture them so they aren't rediscovered.
 
-- **Inline response references** (`{{step.response.body.$.id}}`). lazyhttp already
-  has `# @capture` covering the same need; this would let plans authored for
-  VS Code work unmodified. Requires keeping named results addressable and teaching
-  `Expand` (or a pre-pass) to resolve `name.response.…` against stored results.
+- **Inline response references** (`{{step.response.body.$.id}}`) — ✅ shipped.
+  Resolved in `Model.resolveResponseRef` (`ui/model.go`), threaded into expansion
+  via the new `Vars.ExpandFunc` hook (`vars.go`) so the matcher stays in one place;
+  `varPattern` was widened to carry JSON-path punctuation through the token. Maps
+  `name.response.body.<path>` / `name.response.headers.<Name>` onto a `capture.Eval`
+  expression against the named step's most recent result. `# @capture` still covers
+  the same need and reads better in long chains.
 - **`$dotenv` / `$shared` / `http-client.private.env.json`.** Extend `vars.go`
   loading: read a sibling `.env`, merge `$shared` into every env, and layer the
   private env file over `http-client.env.json`.

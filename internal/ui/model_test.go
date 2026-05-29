@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -248,6 +249,55 @@ func TestExpandBodyFromFile(t *testing.T) {
 	// A missing file surfaces as an error so the step can fail visibly.
 	if _, err := m.expand(step.Step{Kind: step.KindHTTP, BodyFile: "nope.json"}); err == nil {
 		t.Error("expected an error for a missing body file")
+	}
+}
+
+// TestResponseRefFlowsIntoLaterStep verifies inline response references
+// ({{name.response.body.$.path}}, {{name.response.headers.X}}) resolve against an
+// earlier named step's stored result, the way VS Code REST Client plans expect.
+func TestResponseRefFlowsIntoLaterStep(t *testing.T) {
+	m := Model{
+		vars: httpfile.Vars{"host": "http://api"},
+		steps: []step.Step{
+			{Name: "login", Kind: step.KindHTTP, Method: "POST", URL: "{{host}}/login"},
+			{
+				Kind:    step.KindHTTP,
+				Method:  "GET",
+				URL:     "{{host}}/me/{{login.response.body.$.id}}",
+				Headers: map[string]string{"Authorization": "Bearer {{login.response.body.token}}"},
+				Body:    "loc={{login.response.headers.Location}}",
+			},
+		},
+		results: make([]step.Result, 2),
+	}
+
+	// The login response carries a token, an id, and a Location header.
+	hdr := http.Header{}
+	hdr.Set("Location", "/sessions/9")
+	m.onResult(exec.ResultMsg{Index: 0, Result: step.Result{
+		Status: step.Done, StatusCode: 200,
+		Body:   `{"token":"abc","id":7}`,
+		Header: hdr,
+	}})
+
+	got, err := m.expand(m.steps[1])
+	if err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+	if got.URL != "http://api/me/7" {
+		t.Errorf("URL = %q, want http://api/me/7", got.URL)
+	}
+	if got.Headers["Authorization"] != "Bearer abc" {
+		t.Errorf("Authorization = %q, want Bearer abc", got.Headers["Authorization"])
+	}
+	if got.Body != "loc=/sessions/9" {
+		t.Errorf("Body = %q, want loc=/sessions/9", got.Body)
+	}
+
+	// A reference to a step that hasn't run stays literal rather than erroring.
+	unrun := step.Step{Kind: step.KindHTTP, URL: "{{nope.response.body.$.id}}"}
+	if got, _ := m.expand(unrun); got.URL != "{{nope.response.body.$.id}}" {
+		t.Errorf("unresolved ref = %q, want the placeholder untouched", got.URL)
 	}
 }
 

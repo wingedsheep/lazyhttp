@@ -9,9 +9,12 @@ import (
 	"strings"
 )
 
-// varPattern matches IntelliJ-style placeholders such as {{host}} and dynamic
-// variables with optional args such as {{$uuid}} or {{$randomInt 0 9}}.
-var varPattern = regexp.MustCompile(`\{\{\s*(\$?[\w.-]+(?:\s+[^}]+)?)\s*\}\}`)
+// varPattern matches IntelliJ-style placeholders: plain {{host}}, dynamic
+// variables with optional args ({{$uuid}}, {{$randomInt 0 9}}), and inline
+// response references ({{login.response.body.$.id}}). It captures any run of
+// non-brace characters between {{ }} and lets Expand decide how to resolve it,
+// so JSON-path punctuation ($ . [ ] *) inside a reference comes through intact.
+var varPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
 
 // Vars holds the resolved variable set for a plan: values defined inline in the
 // .http file (@name = value) layered over values from an environment file.
@@ -73,8 +76,24 @@ func LoadEnvNames(planPath string) ([]string, error) {
 // Expand replaces every {{var}} in s with its resolved value. Unknown variables
 // are left untouched so the user can see what failed to resolve.
 func (v Vars) Expand(s string) string {
+	return v.ExpandFunc(s, nil)
+}
+
+// ExpandFunc is Expand with an extra resolver consulted first for each
+// placeholder. It lets callers that hold context the variable map can't —
+// notably the UI, which resolves inline response references against stored
+// results — plug that in without duplicating the matcher. resolve receives the
+// trimmed token and returns ok=true to claim it; a nil resolver, or one that
+// declines, falls back to dynamic variables and then the variable map, leaving
+// unknown placeholders untouched.
+func (v Vars) ExpandFunc(s string, resolve func(token string) (string, bool)) string {
 	return varPattern.ReplaceAllStringFunc(s, func(match string) string {
 		token := strings.TrimSpace(varPattern.FindStringSubmatch(match)[1])
+		if resolve != nil {
+			if val, ok := resolve(token); ok {
+				return val
+			}
+		}
 		// Dynamic variables ({{$uuid}}, {{$randomInt 0 9}}) resolve before the
 		// user map, splitting the token into a name and space-separated args.
 		if strings.HasPrefix(token, "$") {

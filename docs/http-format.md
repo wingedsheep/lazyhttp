@@ -93,6 +93,35 @@ Values come from three places, later ones overriding earlier:
    runs, so position doesn't matter. Example: `@product = lazyhttp widget`.
 3. **Captures** — values pulled from responses by `# @capture`.
 
+### Inline response references
+
+A step can pull a value straight out of an **earlier step's response** without a
+`# @capture`, using the VS Code REST Client syntax `{{name.response.…}}`. Give the
+source step a name (`# @name login` or a `### login` heading), then reference it:
+
+| Reference | Resolves to |
+| --- | --- |
+| `{{login.response.body.$.token}}` | A JSON path into the response body (`$.`, `json.`, and a bare path all work). |
+| `{{login.response.body.*}}` | The entire response body. |
+| `{{login.response.headers.Location}}` | A response header value. |
+
+```http
+### login
+POST {{api}}/login
+
+###
+GET {{api}}/me
+Authorization: Bearer {{login.response.body.$.token}}
+```
+
+The path after `body.` is evaluated exactly like a `# @capture` expression, so
+nested keys and array indexing (`{{login.response.body.items[0].id}}`) work too.
+References resolve at **execution time** against the named step's most recent
+result; if that step hasn't run yet (or the path doesn't resolve), the
+placeholder is left untouched like any unknown variable. `# @capture` remains the
+idiomatic lazyhttp approach and reads better in long chains — response references
+are here so plans authored for VS Code run unmodified.
+
 ### Dynamic variables
 
 `{{$…}}` placeholders are generated fresh each time a step is sent — every
@@ -185,9 +214,6 @@ Each entry lists the upstream syntax and what lazyhttp does with it today.
   `.env` file discovery. Left literal for now. (Other dynamic variables —
   `{{$uuid}}`, `{{$timestamp}}`, `{{$randomInt}}`, `{{$datetime}}`,
   `{{$processEnv}}` — are supported; see [Dynamic variables](#dynamic-variables).)
-- **Inline response references** — `{{login.response.body.$.id}}`,
-  `{{login.response.headers.X-Auth}}`.
-  Not resolved; sent literally. Use `# @capture` instead.
 - **Response-handler scripts** — `> {% client.test(...); client.global.set(...) %}`.
   Ignored (lines starting with `>` are dropped). Use `# @capture` / `# @assert`.
 - **Pre-request scripts** — `< {% request.variables.set(...) %}`.

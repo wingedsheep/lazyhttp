@@ -37,3 +37,29 @@ func TestLoadEnvNamesMissingFile(t *testing.T) {
 		t.Errorf("got %v, want none", got)
 	}
 }
+
+// TestExpandFuncResolver verifies ExpandFunc consults the resolver first and,
+// when it declines (or is nil), falls back to the variable map — leaving unknown
+// placeholders untouched. The widened matcher must also carry JSON-path
+// punctuation ($ . [ ]) inside a token through to the resolver intact.
+func TestExpandFuncResolver(t *testing.T) {
+	v := Vars{"host": "example.com"}
+	resolve := func(token string) (string, bool) {
+		if token == "login.response.body.$.items[0].id" {
+			return "42", true
+		}
+		return "", false // decline everything else
+	}
+
+	got := v.ExpandFunc("{{host}}/o/{{login.response.body.$.items[0].id}}/{{missing}}", resolve)
+	want := "example.com/o/42/{{missing}}"
+	if got != want {
+		t.Errorf("ExpandFunc = %q, want %q", got, want)
+	}
+
+	// A nil resolver behaves exactly like Expand: the reference is unknown and
+	// stays literal rather than erroring.
+	if got := v.ExpandFunc("{{login.response.body.$.id}}", nil); got != "{{login.response.body.$.id}}" {
+		t.Errorf("nil resolver = %q, want the placeholder untouched", got)
+	}
+}
