@@ -461,7 +461,9 @@ func (m Model) scrollIndicator() string {
 // {{vars}} expanded against the current variable set so the preview matches
 // what will actually run.
 func (m Model) formatResult(i int) string {
-	s := m.expand(m.steps[i])
+	// expand may fail to read a `< file` body; the preview still shows the
+	// request line and the file reference, with the error noted below.
+	s, expandErr := m.expand(m.steps[i])
 	r := m.results[i]
 	var b strings.Builder
 
@@ -477,7 +479,20 @@ func (m Model) formatResult(i int) string {
 			for k, v := range s.Headers {
 				b.WriteString(m.styles.dim.Render(k+": "+v) + "\n")
 			}
-			if s.Body != "" {
+			switch {
+			case s.BodyFile != "":
+				ref := "< " + s.BodyFile
+				if s.BodyFileVars {
+					ref = "<@ " + s.BodyFile
+				}
+				b.WriteString("\n" + m.styles.dim.Render("body from "+ref) + "\n")
+				if expandErr != nil {
+					b.WriteString(lipgloss.NewStyle().Foreground(palette.danger).
+						Render(expandErr.Error()) + "\n")
+				} else if s.Body != "" {
+					b.WriteString(highlightJSON(s.Body, jsonTheme) + "\n")
+				}
+			case s.Body != "":
 				b.WriteString("\n" + highlightJSON(s.Body, jsonTheme) + "\n")
 			}
 		}

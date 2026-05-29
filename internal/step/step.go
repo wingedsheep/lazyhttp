@@ -19,13 +19,13 @@ const (
 // raw templates with {{var}} placeholders intact; they're expanded at execution
 // time so captures from earlier steps can flow in.
 type Step struct {
-	Name     string
-	Group    string // optional section heading; empty means ungrouped
-	Kind     Kind
-	Method   string            // HTTP only
-	URL      string            // HTTP only
-	Headers  map[string]string // HTTP only
-	Body     string            // HTTP request body, or the shell script
+	Name    string
+	Group   string // optional section heading; empty means ungrouped
+	Kind    Kind
+	Method  string            // HTTP only
+	URL     string            // HTTP only
+	Headers map[string]string // HTTP only
+	Body    string            // HTTP request body, or the shell script
 
 	// BodyFile names a file whose contents are sent as the request body, from a
 	// `< path` / `<@ path` line; empty when the body is inline. BodyFileVars is
@@ -34,10 +34,10 @@ type Step struct {
 	BodyFile     string
 	BodyFileVars bool
 
-	Captures []Capture         // values to extract from the response
-	Asserts  []Assertion       // checks to run against the response
-	Reset    bool              // when this step succeeds, reset the rest of the plan
-	Raw      string            // original text of the block, for the detail view
+	Captures []Capture   // values to extract from the response
+	Asserts  []Assertion // checks to run against the response
+	Reset    bool        // when this step succeeds, reset the rest of the plan
+	Raw      string      // original text of the block, for the detail view
 }
 
 // Capture extracts a value from a step's response into a named variable that

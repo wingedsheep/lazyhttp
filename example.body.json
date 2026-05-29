@@ -1,0 +1,5 @@
+{
+  "title": "{{product}}",
+  "via": "file-body",
+  "uuid": "{{$uuid}}"
+}

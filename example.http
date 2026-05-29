@@ -151,6 +151,20 @@ X-Request-Id: {{$uuid}}
   "nonce": {{$randomInt 1000 9999}}
 }
 
+### Send a body loaded from a file, with {{vars}} expanded
+### `<@ ./example.body.json` reads the file next to this plan and expands its
+### {{vars}} before sending (use `< file` to send it verbatim instead). Toggle
+### the request preview with `i` to see the resolved body.
+# @name Body from file
+# @assert status == 200
+# @assert json.json.title == lazyhttp widget
+# @assert json.json.via == file-body
+# @assert json.json.uuid exists
+POST {{bin}}/anything
+Content-Type: application/json
+
+<@ ./example.body.json
+
 ### Print everything captured so far
 ### IntelliJ treats this block as a comment, so the file stays valid there.
 # @group Utilities

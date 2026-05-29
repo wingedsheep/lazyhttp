@@ -136,3 +136,48 @@ func TestParseReset(t *testing.T) {
 		t.Fatalf("reset directive not parsed: %+v", steps)
 	}
 }
+
+func TestParseBodyFromFile(t *testing.T) {
+	cases := []struct {
+		name     string
+		body     string
+		wantFile string
+		wantVars bool
+	}{
+		{"plain", "< ./body.json", "./body.json", false},
+		{"expand", "<@ ./body.xml", "./body.xml", true},
+		{"expand encoding", "<@latin1 ./body.txt", "./body.txt", true},
+		{"no space", "<./body.json", "./body.json", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			steps := Parse("### Send\nPOST /items\nContent-Type: application/json\n\n"+tc.body+"\n", Vars{})
+			if len(steps) != 1 {
+				t.Fatalf("want 1 step, got %d", len(steps))
+			}
+			s := steps[0]
+			if s.BodyFile != tc.wantFile {
+				t.Errorf("BodyFile = %q, want %q", s.BodyFile, tc.wantFile)
+			}
+			if s.BodyFileVars != tc.wantVars {
+				t.Errorf("BodyFileVars = %v, want %v", s.BodyFileVars, tc.wantVars)
+			}
+			if s.Body != "" {
+				t.Errorf("inline Body should be empty for a file ref, got %q", s.Body)
+			}
+		})
+	}
+}
+
+// TestParseScriptBodiesIgnored verifies response-handler (`>`) and pre-request
+// (`< {% … %}`) scripts are not mistaken for a body or a body-file reference.
+func TestParseScriptBodiesIgnored(t *testing.T) {
+	respHandler := Parse("### A\nGET /x\n\n> {% client.test(); %}\n", Vars{})[0]
+	if respHandler.Body != "" || respHandler.BodyFile != "" {
+		t.Errorf("response handler should be ignored: %+v", respHandler)
+	}
+	preReq := Parse("### B\nGET /x\n\n< {% request.variables.set('a', 1) %}\n", Vars{})[0]
+	if preReq.Body != "" || preReq.BodyFile != "" {
+		t.Errorf("pre-request script should be ignored: %+v", preReq)
+	}
+}

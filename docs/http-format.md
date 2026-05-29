@@ -26,8 +26,10 @@ Content-Type: application/json
 - **Request line** — `METHOD URL`. The method is optional and defaults to `GET`;
   a trailing `HTTP/1.1` is accepted and ignored.
 - **Headers** follow, one `Name: value` per line, until a blank line.
-- **Body** is everything after that blank line. Lines starting with `>` or `<`
-  (IntelliJ response-handler / file-reference syntax) are ignored, not sent.
+- **Body** is everything after that blank line. A body that begins with `< path`
+  or `<@ path` loads its contents [from a file](#request-body-from-a-file)
+  instead. Response-handler scripts (`> {% … %}`) and pre-request scripts
+  (`< {% … %}`) are ignored, not sent.
 
 A step that contains only directives (e.g. a lone `# @group`) produces no
 request — but its `@group` still carries forward to the steps below it.
@@ -120,6 +122,32 @@ variable sets; `--env NAME` picks one:
 }
 ```
 
+## Request body from a file
+
+Instead of an inline body, a step can load its request body from a file. The
+reference is the **first line** of the body (after the blank line that ends the
+headers):
+
+```
+### Upload
+POST {{api}}/objects
+Content-Type: application/json
+
+< ./payload.json
+```
+
+- **`< path`** sends the file's contents verbatim — `{{vars}}` inside the file
+  are **not** expanded.
+- **`<@ path`** expands `{{vars}}` (and dynamic variables) in the file's contents
+  before sending, just like an inline body.
+- **`<@encoding path`** (e.g. `<@latin1 ./body.txt`) is accepted; the encoding
+  token is currently ignored and the file is read as UTF-8.
+
+The path is resolved relative to the **plan file's directory**. If the file can't
+be read, the step fails with the read error rather than sending an empty body.
+Toggle the request preview (`i`) to see the resolved `body from < path` and its
+contents.
+
 ## Shell steps
 
 A step marked `# @shell` runs its body as a script via `$SHELL -c` (falling back
@@ -157,17 +185,14 @@ Each entry lists the upstream syntax and what lazyhttp does with it today.
   `.env` file discovery. Left literal for now. (Other dynamic variables —
   `{{$uuid}}`, `{{$timestamp}}`, `{{$randomInt}}`, `{{$datetime}}`,
   `{{$processEnv}}` — are supported; see [Dynamic variables](#dynamic-variables).)
-- **Request body from a file** — `< ./body.json`.
-  Silently dropped: `parseHTTP` ignores any body starting with `<`, so no body is sent.
-- **File body with variable expansion** — `<@ ./body.xml`, `<@latin1 ./file`.
-  Silently dropped, same as above.
 - **Inline response references** — `{{login.response.body.$.id}}`,
   `{{login.response.headers.X-Auth}}`.
   Not resolved; sent literally. Use `# @capture` instead.
 - **Response-handler scripts** — `> {% client.test(...); client.global.set(...) %}`.
   Ignored (lines starting with `>` are dropped). Use `# @capture` / `# @assert`.
 - **Pre-request scripts** — `< {% request.variables.set(...) %}`.
-  Treated as a file-body line and dropped.
+  Recognized as a script and ignored (not sent as a body). The variables it would
+  set are not applied.
 - **Per-request settings** — `# @no-redirect`, `# @no-cookie-jar`, `# @no-log`,
   `# @timeout 30 s`, `# @prompt {pw}`, `# @note`.
   Unrecognized directives are ignored (treated as plain comments).
@@ -187,10 +212,8 @@ Each entry lists the upstream syntax and what lazyhttp does with it today.
 
 ### Footguns worth remembering
 
-- **`< file` bodies vanish.** If you copy a plan that loads its body from a file,
-  lazyhttp sends an empty body with no warning. Inline the body instead.
 - **`Basic` auth isn't encoded.** Provide the already-base64-encoded credentials
   (`Authorization: Basic dXNlcjpwYXNz`) rather than the `user pass` shorthand.
 
-If you hit one of these and want it supported, it's worth opening an issue — several
-(dynamic variables, `< file` bodies, per-request directives) are good candidates.
+If you hit one of these and want it supported, it's worth opening an issue —
+several (per-request directives, response references) are good candidates.

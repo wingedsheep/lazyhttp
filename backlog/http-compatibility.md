@@ -71,10 +71,16 @@ discovery). The rest of this section is kept for reference.
 
 ---
 
-## Phase 2 — Request body from a file (`< ./body.json`, `<@ ./file`)
+## Phase 2 — Request body from a file (`< ./body.json`, `<@ ./file`) — ✅ shipped in 0.4.0
 
 **Value:** high. **Effort:** small. Today these bodies are **silently dropped** —
 the worst kind of gap because the request still sends, just with no body.
+
+Landed via `BodyFile`/`BodyFileVars` on `step.Step`, `parseBodyRef` in
+`parse.go`, and the file read in `Model.expand` (`ui/model.go`), which now
+returns an error so a missing file surfaces as a failed result instead of an
+empty body. The request preview shows `body from < path`. The rest of this
+section is kept for reference.
 
 ### Changes
 

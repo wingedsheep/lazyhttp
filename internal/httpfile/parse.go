@@ -165,6 +165,28 @@ func applyDirective(s *step.Step, directive string) {
 	}
 }
 
+// parseBodyRef reads an IntelliJ "input file" body line: `< path` sends the
+// file verbatim, `<@ path` expands {{vars}} in its contents, and `<@encoding
+// path` carries an encoding token that we accept and ignore (treated as UTF-8).
+// It returns ok=false for a `< {% … %}` pre-request script or an empty
+// reference, which the caller leaves as no body.
+func parseBodyRef(line string) (path string, expand bool, ok bool) {
+	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "<"))
+	if strings.HasPrefix(rest, "@") {
+		expand = true
+		rest = strings.TrimSpace(rest[1:])
+	}
+	if rest == "" || strings.HasPrefix(rest, "{%") {
+		return "", false, false // pre-request script or empty reference
+	}
+	fields := strings.Fields(rest)
+	// `<@encoding path` puts the encoding first; take the last token as the path.
+	if expand && len(fields) > 1 {
+		return fields[len(fields)-1], true, true
+	}
+	return fields[0], expand, true
+}
+
 // parseAssertion reads "<expr> <op> <want>" or "<expr> exists" from a directive.
 func parseAssertion(rest string) (step.Assertion, bool) {
 	fields := strings.Fields(rest)
@@ -214,9 +236,23 @@ func parseHTTP(s step.Step, body string) (step.Step, bool) {
 		}
 	}
 
-	// Remainder is the request body (response handlers / refs are ignored).
+	// Remainder is the request body. A leading `>` is a response-handler script
+	// and a `< {% … %}` is a pre-request script — both still ignored. A `< path`
+	// / `<@ path` line names a file to send as the body; record it for the
+	// executor to read (its contents replace the inline body).
 	rest := strings.TrimSpace(strings.Join(lines[i:], "\n"))
-	if !strings.HasPrefix(rest, ">") && !strings.HasPrefix(rest, "<") {
+	switch {
+	case rest == "" || strings.HasPrefix(rest, ">"):
+		// no body, or a response-handler script — nothing to send
+	case strings.HasPrefix(rest, "<"):
+		first := rest
+		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+			first = rest[:nl]
+		}
+		if path, expand, ok := parseBodyRef(first); ok {
+			s.BodyFile, s.BodyFileVars = path, expand
+		}
+	default:
 		s.Body = rest
 	}
 

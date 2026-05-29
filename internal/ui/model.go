@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -475,6 +477,15 @@ func (m *Model) run(i int) tea.Cmd {
 	if i < 0 || i >= len(m.steps) {
 		return nil
 	}
+	// Resolve {{vars}} (and any `< file` body) up front. A read failure fails the
+	// step immediately — mirroring a transport error — rather than sending an
+	// empty-bodied request, so the silent-drop footgun becomes a visible error.
+	s, err := m.expand(m.steps[i])
+	if err != nil {
+		return func() tea.Msg {
+			return exec.ResultMsg{Index: i, Result: step.Result{Status: step.Failed, Err: err}}
+		}
+	}
 	m.results[i] = step.Result{Status: step.Running}
 	if i < len(m.bodyView) {
 		m.bodyView[i] = ""
@@ -485,7 +496,7 @@ func (m *Model) run(i int) tea.Cmd {
 	// Snapshot the highlight palette on the UI thread so the off-thread
 	// highlighter can't race a theme switch that rebuilds jsonTheme.
 	st := jsonTheme
-	cmd := exec.Run(i, m.expand(m.steps[i]), func(body string) string {
+	cmd := exec.Run(i, s, func(body string) string {
 		return highlightJSON(body, st)
 	})
 	// Wake the spinner only if it isn't already animating, so a run-from-here
@@ -499,15 +510,43 @@ func (m *Model) run(i int) tea.Cmd {
 
 // expand returns a copy of s with its URL, headers and body resolved against
 // the current variables. Captures are left untouched (they target the response).
-func (m Model) expand(s step.Step) step.Step {
+//
+// When the step's body comes from a file (`< path` / `<@ path`), the file is
+// read here — where the variable set is available — and its contents become the
+// body. `<@` additionally expands {{vars}} in those contents; `<` sends them
+// verbatim. The path is resolved relative to the plan file's directory. A read
+// error is returned so the caller can surface it as a failed result rather than
+// silently sending an empty body. BodyFile is kept on the returned step (now
+// holding the var-expanded path) for the request preview.
+func (m Model) expand(s step.Step) (step.Step, error) {
 	s.URL = m.vars.Expand(s.URL)
-	s.Body = m.vars.Expand(s.Body)
 	headers := make(map[string]string, len(s.Headers))
 	for k, v := range s.Headers {
 		headers[k] = m.vars.Expand(v)
 	}
 	s.Headers = headers
-	return s
+
+	if s.BodyFile == "" {
+		s.Body = m.vars.Expand(s.Body)
+		return s, nil
+	}
+
+	path := m.vars.Expand(s.BodyFile)
+	s.BodyFile = path
+	full := path
+	if !filepath.IsAbs(full) {
+		full = filepath.Join(filepath.Dir(m.path), full)
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return s, err
+	}
+	body := string(data)
+	if s.BodyFileVars {
+		body = m.vars.Expand(body)
+	}
+	s.Body = body
+	return s, nil
 }
 
 // evaluate runs a finished step's captures and assertions, returning the result

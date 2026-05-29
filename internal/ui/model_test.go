@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -204,9 +205,49 @@ func TestCaptureFlowsIntoLaterStep(t *testing.T) {
 	}
 
 	// Step 1's request should now expand using the captured value.
-	got := m.expand(m.steps[1]).URL
+	expanded, err := m.expand(m.steps[1])
+	if err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+	got := expanded.URL
 	if got != "http://api/posts/42" {
 		t.Errorf("expanded URL = %q, want http://api/posts/42", got)
+	}
+}
+
+// TestExpandBodyFromFile verifies a `< file` body is read relative to the plan
+// directory and sent verbatim, while a `<@ file` body has its {{vars}} expanded.
+func TestExpandBodyFromFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "body.json"), []byte(`{"name":"{{who}}"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := Model{
+		path: filepath.Join(dir, "plan.http"),
+		vars: httpfile.Vars{"who": "ada"},
+	}
+
+	// `<` sends the file verbatim — placeholders stay raw.
+	plain, err := m.expand(step.Step{Kind: step.KindHTTP, BodyFile: "body.json"})
+	if err != nil {
+		t.Fatalf("expand plain: %v", err)
+	}
+	if plain.Body != `{"name":"{{who}}"}` {
+		t.Errorf("plain body = %q, want raw placeholder", plain.Body)
+	}
+
+	// `<@` expands {{vars}} in the file contents.
+	expanded, err := m.expand(step.Step{Kind: step.KindHTTP, BodyFile: "body.json", BodyFileVars: true})
+	if err != nil {
+		t.Fatalf("expand vars: %v", err)
+	}
+	if expanded.Body != `{"name":"ada"}` {
+		t.Errorf("expanded body = %q, want vars resolved", expanded.Body)
+	}
+
+	// A missing file surfaces as an error so the step can fail visibly.
+	if _, err := m.expand(step.Step{Kind: step.KindHTTP, BodyFile: "nope.json"}); err == nil {
+		t.Error("expected an error for a missing body file")
 	}
 }
 
