@@ -1,0 +1,25 @@
+    # Shared sign-in flow, imported by example.http via `# @import ./example.auth.http`.
+#
+# Logs in to {{api}} with the environment's {{user}}/{{pass}} and captures the
+# access token as {{token}} (and the username as {{me}}). Because an imported
+# file's captures flow into the steps after the import, every request below the
+# import line can use {{token}} — the point of keeping a login in its own file
+# instead of copy-pasting it into every plan.
+#
+# This file is also valid in the IntelliJ HTTP Client / VS Code REST Client.
+
+### Log in
+# @group Auth
+# @name Log in
+# @capture token = json.accessToken
+# @capture me = json.username
+# @assert status == 200
+# @assert json.username == emilys
+# @assert json.accessToken exists
+POST {{api}}/auth/login
+Content-Type: application/json
+
+{
+  "username": "{{user}}",
+  "password": "{{pass}}"
+}

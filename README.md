@@ -101,8 +101,8 @@ a named environment and its values fill in `{{vars}}`:
 ## Writing `.http` files
 
 The full `.http` syntax lazyhttp accepts — steps, the `# @name` / `# @group` /
-`# @capture` / `# @assert` / `# @shell` / `# @reset` directives, capture and
-assertion expressions, and `{{variable}}` resolution — is documented in
+`# @capture` / `# @assert` / `# @shell` / `# @reset` / `# @import` directives,
+capture and assertion expressions, and `{{variable}}` resolution — is documented in
 **[docs/http-format.md](docs/http-format.md)**. See [`example.http`](example.http)
 for a complete, runnable tour.
 

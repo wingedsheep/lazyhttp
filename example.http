@@ -51,22 +51,14 @@ Accept: application/json
 GET {{api}}/products/search?q=phone
 Accept: application/json
 
-### Log in and capture the access token from the response
-### The captured {{token}} flows into the next step's Authorization header.
+### Sign in via a shared, imported flow
+### `# @import` splices in the steps of example.auth.http right here, as if they
+### were pasted in — a reusable login kept in its own file. Its
+### `# @capture token = …` populates {{token}} for every step below, and the
+### imported "Log in" step is referenceable by name (see the next step). This is
+### how you share one auth flow across many plans instead of copy-pasting it.
 # @group Auth
-# @name Log in
-# @capture token = json.accessToken
-# @capture me = json.username
-# @assert status == 200
-# @assert json.username == emilys
-# @assert json.accessToken exists
-POST {{api}}/auth/login
-Content-Type: application/json
-
-{
-  "username": "{{user}}",
-  "password": "{{pass}}"
-}
+# @import ./example.auth.http
 
 ### Reuse the login token with an inline response reference (VS Code syntax)
 ### {{Log in.response.body.$.accessToken}} reads the access token straight out of

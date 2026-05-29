@@ -4,7 +4,9 @@ package httpfile
 
 import (
 	"bufio"
+	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -27,24 +29,56 @@ func normalizeNewlines(s string) string {
 	return strings.ReplaceAll(s, "\r", "\n")
 }
 
-// ParseFile reads a .http file from disk and parses it. The supplied vars (from
-// an environment file) are extended in place with any inline @definitions found.
+// ParseFile reads a .http file from disk and parses it, resolving any
+// `# @import ./other.http` directives by splicing the imported file's steps in
+// at the point of import. The supplied vars (from an environment file) are
+// extended in place with the inline @definitions of every file involved.
 func ParseFile(path string, vars Vars) ([]step.Step, error) {
+	if vars == nil {
+		vars = Vars{}
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	return parseFile(abs, vars, nil)
+}
+
+// parseFile reads and parses one file as part of an import chain. stack is the
+// list of absolute paths currently being parsed (the import ancestry), used to
+// detect cycles before reading would recurse forever.
+func parseFile(path string, vars Vars, stack []string) ([]step.Step, error) {
+	for _, p := range stack {
+		if p == path {
+			chain := append(append([]string{}, stack...), path)
+			return nil, fmt.Errorf("import cycle: %s", strings.Join(chain, " → "))
+		}
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return Parse(string(data), vars), nil
+	return parseSteps(string(data), filepath.Dir(path), vars, append(stack, path))
 }
 
 // Parse turns the contents of a .http file into steps. Inline @definitions are
 // merged into vars (overriding the env file). Placeholders in the steps are NOT
 // expanded here — that happens at execution time so response captures can flow
-// into later steps.
+// into later steps. `@import` directives are resolved relative to the current
+// working directory; use ParseFile for path-relative imports and cycle errors.
 func Parse(src string, vars Vars) []step.Step {
 	if vars == nil {
 		vars = Vars{}
 	}
+	steps, _ := parseSteps(src, "", vars, nil)
+	return steps
+}
+
+// parseSteps is the core parser shared by Parse and parseFile: it harvests
+// inline variable definitions, then turns each ### block into a step. An
+// `@import` block is replaced by the steps of the referenced file, resolved
+// relative to dir and guarded against cycles via stack.
+func parseSteps(src, dir string, vars Vars, stack []string) ([]step.Step, error) {
 	// Normalize Windows (\r\n) and classic-Mac (\r) line endings up front so a
 	// stray \r can't ride along on a URL, header value, directive arg, or
 	// captured-var name in a plan authored on Windows. Every split below is on
@@ -67,6 +101,17 @@ func Parse(src string, vars Vars) []step.Step {
 		if s.Group != "" {
 			current = s.Group // a @group directive moves the section forward
 		}
+		// An `@import` block contributes the imported file's steps (with their
+		// own groups intact) rather than a step of its own; captures from those
+		// steps then flow forward through the shared variable map at run time.
+		if s.Import != "" {
+			imported, err := resolveImport(s.Import, dir, vars, stack)
+			if err != nil {
+				return nil, err
+			}
+			steps = append(steps, imported...)
+			continue
+		}
 		if !ok {
 			continue
 		}
@@ -75,7 +120,21 @@ func Parse(src string, vars Vars) []step.Step {
 		}
 		steps = append(steps, s)
 	}
-	return steps
+	return steps, nil
+}
+
+// resolveImport loads the steps of an imported plan. The reference is resolved
+// relative to the importing file's directory (dir); nested imports inside it
+// resolve relative to their own file, matching the `< body` file rule.
+func resolveImport(ref, dir string, vars Vars, stack []string) ([]step.Step, error) {
+	path := ref
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(dir, path)
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return parseFile(path, vars, stack)
 }
 
 // block is the raw text of one ### section plus the name carried on its header.
@@ -161,6 +220,8 @@ func applyDirective(s *step.Step, directive string) {
 		s.Kind = step.KindShell
 	case directive == "@reset":
 		s.Reset = true
+	case strings.HasPrefix(directive, "@import"):
+		s.Import = strings.TrimSpace(strings.TrimPrefix(directive, "@import"))
 	case strings.HasPrefix(directive, "@name"):
 		s.Name = strings.TrimSpace(strings.TrimPrefix(directive, "@name"))
 	case strings.HasPrefix(directive, "@group"):

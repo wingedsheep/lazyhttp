@@ -47,6 +47,7 @@ All directives are `#` comments. They are case-sensitive and use a **single** `#
 | `# @assert <expr> <op> [<want>]` | Check a value from the response; the step fails if any assertion fails. |
 | `# @shell` | Treat the step body as a shell script instead of an HTTP request. |
 | `# @reset` | When this step succeeds, clear every other step's result and drop captured variables — a clean-slate anchor to "run from here". |
+| `# @import <path>` | Splice another `.http` file's steps in at this point. See [Composing plans with `@import`](#composing-plans-with-import). |
 
 You can repeat `# @capture` and `# @assert` as many times as you like in one step.
 Plain `#` comments with no recognized directive are simply ignored.
@@ -177,6 +178,47 @@ be read, the step fails with the read error rather than sending an empty body.
 Toggle the request preview (`i`) to see the resolved `body from < path` and its
 contents.
 
+## Composing plans with `@import`
+
+A shared login flow, a set of common headers, or a block of `@var` definitions
+often needs to be reused across several plans. Instead of copy-pasting it,
+`# @import` pulls another `.http` file in:
+
+```http
+### Sign in first
+# @import ./auth.http
+
+### Now use the captured token
+GET {{api}}/me
+Authorization: Bearer {{token}}
+```
+
+An `@import` block contributes the **imported file's steps**, spliced in at the
+point of import in their original order — exactly as if you had pasted them in.
+That means everything flows naturally:
+
+- **Captures flow forward.** A `# @capture token = json.accessToken` in
+  `auth.http` populates `{{token}}` for every step after the import, because
+  expansion happens at execution time against one shared variable set.
+- **Inline `@var` definitions are merged.** A `@token = …` line in the imported
+  file joins the plan's variables like any other inline definition.
+- **The imported steps appear in the list** and run with "run from here" / "run
+  all" just like local steps; each keeps its own `@group`.
+
+The path is resolved relative to the **importing file's directory**, so a nested
+import inside the imported file resolves against *its* own location (the same
+rule as a [`< body` file](#request-body-from-a-file)). An `@import` block holds
+nothing but the directive — put the import on its own `###` section.
+
+Imports may nest, but a **cycle** (`a.http` → `b.http` → `a.http`) is an error,
+as is importing a file that can't be read; either fails the load with a clear
+message rather than hanging or silently dropping steps. Importing the same file
+from two places is fine — its steps are contributed once per import.
+
+> `@import` is a lazyhttp extension written as a `#` comment, so a plan that uses
+> it stays parseable in IntelliJ / VS Code (which simply ignore the directive and
+> don't pull the file in).
+
 ## Shell steps
 
 A step marked `# @shell` runs its body as a script via the platform's shell —
@@ -207,7 +249,7 @@ See [`example.http`](../example.http) for a complete, runnable tour of every fea
 
 lazyhttp reads the same `.http` format as the IntelliJ HTTP Client and the VS Code
 REST Client, but it implements a focused subset plus its own extensions (`# @group`,
-`# @capture`, `# @assert`, `# @shell`, `# @reset`). The features below exist in one
+`# @capture`, `# @assert`, `# @shell`, `# @reset`, `# @import`). The features below exist in one
 or both of those tools and are **not supported yet**. A plan using them stays
 parseable — lazyhttp will simply ignore or pass through the unsupported part — but
 it won't behave the way it does in the original tool, so watch for the footguns

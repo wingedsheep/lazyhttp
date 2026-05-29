@@ -38,6 +38,11 @@ type Step struct {
 	Asserts  []Assertion // checks to run against the response
 	Reset    bool        // when this step succeeds, reset the rest of the plan
 	Raw      string      // original text of the block, for the detail view
+
+	// Import names another .http file whose steps are spliced in at this point;
+	// empty for a normal step. It is resolved at parse time (see httpfile), so by
+	// the time a plan reaches the executor no step carries an Import.
+	Import string
 }
 
 // Capture extracts a value from a step's response into a named variable that

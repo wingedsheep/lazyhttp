@@ -1,6 +1,8 @@
 package httpfile
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/wingedsheep/lazyhttp/internal/step"
@@ -217,5 +219,121 @@ func TestParseCRLF(t *testing.T) {
 	}
 	if len(s.Asserts) != 1 || s.Asserts[0].Want != "201" {
 		t.Errorf("assert RHS carries \\r: %+v", s.Asserts)
+	}
+}
+
+// writeFile is a test helper that drops content at dir/name and fails the test
+// on error.
+func writeFile(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	return p
+}
+
+// TestImportSplicesSteps checks that `# @import ./other.http` inlines the
+// imported file's steps at the point of import, in order, and that the imported
+// file's inline @defs land in the shared variable set.
+func TestImportSplicesSteps(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "auth.http", "@token = secret\n\n### Login\nPOST /login\n")
+	main := writeFile(t, dir, "main.http",
+		"### Before\nGET /a\n\n"+
+			"### Pull in auth\n# @import ./auth.http\n\n"+
+			"### After\nGET /b\n")
+
+	vars := Vars{}
+	steps, err := ParseFile(main, vars)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	got := make([]string, len(steps))
+	for i, s := range steps {
+		got[i] = s.Name
+	}
+	want := []string{"Before", "Login", "After"}
+	if len(got) != len(want) {
+		t.Fatalf("want %v steps, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("step %d: want %q, got %q", i, want[i], got[i])
+		}
+	}
+	if vars["token"] != "secret" {
+		t.Errorf("imported @def not merged: %q", vars["token"])
+	}
+}
+
+// TestImportRelativeToImportingFile checks that a nested import resolves
+// relative to the file that declares it, not the top-level plan.
+func TestImportRelativeToImportingFile(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, sub, "leaf.http", "### Leaf\nGET /leaf\n")
+	// mid.http lives in sub/ and imports leaf.http as a sibling.
+	writeFile(t, sub, "mid.http", "### Mid\nGET /mid\n\n### inc\n# @import ./leaf.http\n")
+	main := writeFile(t, dir, "main.http", "### Main\nGET /main\n\n### inc\n# @import ./sub/mid.http\n")
+
+	steps, err := ParseFile(main, Vars{})
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	got := make([]string, len(steps))
+	for i, s := range steps {
+		got[i] = s.Name
+	}
+	want := []string{"Main", "Mid", "Leaf"}
+	if len(got) != len(want) {
+		t.Fatalf("want %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("step %d: want %q, got %q", i, want[i], got[i])
+		}
+	}
+}
+
+// TestImportCycleErrors checks that a mutual import (a → b → a) fails with a
+// cycle error rather than recursing forever.
+func TestImportCycleErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.http", "### A\nGET /a\n\n### inc\n# @import ./b.http\n")
+	b := writeFile(t, dir, "b.http", "### B\nGET /b\n\n### inc\n# @import ./a.http\n")
+
+	if _, err := ParseFile(b, Vars{}); err == nil {
+		t.Fatal("want cycle error, got nil")
+	}
+}
+
+// TestImportMissingFileErrors checks that importing a file that does not exist
+// surfaces the read error.
+func TestImportMissingFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	main := writeFile(t, dir, "main.http", "### inc\n# @import ./nope.http\n")
+	if _, err := ParseFile(main, Vars{}); err == nil {
+		t.Fatal("want error for missing import, got nil")
+	}
+}
+
+// TestImportDiamondRunsTwice checks that importing the same file from two places
+// is allowed (not flagged as a cycle) and contributes its steps each time.
+func TestImportDiamondRunsTwice(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "common.http", "### Common\nGET /c\n")
+	main := writeFile(t, dir, "main.http",
+		"### one\n# @import ./common.http\n\n### two\n# @import ./common.http\n")
+
+	steps, err := ParseFile(main, Vars{})
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(steps) != 2 {
+		t.Fatalf("want 2 steps (common twice), got %d", len(steps))
 	}
 }
