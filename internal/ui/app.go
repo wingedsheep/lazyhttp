@@ -61,9 +61,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openPlanMsg:
 		return a.openPlan(msg.Path)
 
-	case spinner.TickMsg, exec.ResultMsg:
+	case spinner.TickMsg, exec.ResultMsg,
+		exec.StreamStartMsg, exec.StreamChunkMsg, exec.StreamDoneMsg:
 		// Plan-specific messages: deliver them to the plan even while the overview
-		// is foreground, so an in-flight request finishes and the spinner settles.
+		// is foreground, so an in-flight request (including a live stream) finishes
+		// and the spinner settles.
 		if a.planOpen {
 			nm, cmd := a.plan.Update(msg)
 			a.plan = nm.(Model)

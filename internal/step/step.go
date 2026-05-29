@@ -42,6 +42,28 @@ type Step struct {
 	Timeout    time.Duration
 	NoRedirect bool
 
+	// Stream, set by `# @stream`, opts an HTTP step into incremental delivery:
+	// the executor reads the response body progressively (SSE, NDJSON, a chunked
+	// LLM completion) and the TUI appends it live instead of waiting for the whole
+	// body. Captures and assertions run against the accumulated body once the
+	// stream closes, so they behave exactly as for a buffered response.
+	Stream bool
+
+	// StreamExtract, the optional argument to `# @stream <jsonpath>`, turns the
+	// raw byte stream into just the value at that JSON path within each SSE
+	// `data:` frame — e.g. "choices[0].delta.content" for an OpenAI-style chat
+	// completion, so the response reads as the assembled text rather than the
+	// wire framing. Empty means stream the body verbatim. Implies Stream.
+	StreamExtract string
+
+	// StreamThrough, set by `# @stream-through <command>`, pipes the live
+	// response through an external shell command (e.g. `jq`, `sed`, a script):
+	// the raw bytes are written to the command's stdin as they arrive and its
+	// stdout is shown live and captured as the body. The most flexible transform,
+	// for formats the built-in SSE extractor doesn't cover. Implies Stream; when
+	// both it and StreamExtract are set, StreamThrough wins.
+	StreamThrough string
+
 	Captures []Capture   // values to extract from the response
 	Asserts  []Assertion // checks to run against the response
 	Reset    bool        // when this step succeeds, reset the rest of the plan

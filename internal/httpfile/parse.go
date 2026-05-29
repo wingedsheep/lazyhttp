@@ -224,6 +224,15 @@ func applyDirective(s *step.Step, directive string) {
 		s.Reset = true
 	case directive == "@no-redirect":
 		s.NoRedirect = true
+	case strings.HasPrefix(directive, "@stream-through"):
+		// Pipe the live stream through an external command (jq, sed, a script).
+		s.Stream = true
+		s.StreamThrough = strings.TrimSpace(strings.TrimPrefix(directive, "@stream-through"))
+	case directive == "@stream" || strings.HasPrefix(directive, "@stream "):
+		// `# @stream` streams the body raw; `# @stream <jsonpath>` extracts that
+		// path from each SSE `data:` frame so an LLM token stream reads as text.
+		s.Stream = true
+		s.StreamExtract = strings.TrimSpace(strings.TrimPrefix(directive, "@stream"))
 	case strings.HasPrefix(directive, "@timeout"):
 		if d, ok := parseTimeout(strings.TrimPrefix(directive, "@timeout")); ok {
 			s.Timeout = d

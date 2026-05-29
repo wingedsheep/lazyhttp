@@ -190,6 +190,18 @@ Content-Type: application/json
 # @assert header.Location == /anything
 GET {{bin}}/redirect-to?url=/anything&status_code=302
 
+### Stream the response body in as it arrives
+### `# @stream` reads the body incrementally instead of waiting for the whole
+### thing — watch httpbin emit ten newline-delimited JSON objects one by one in
+### the response pane. The body is kept raw (streams aren't reformatted), and the
+### assertion runs once the stream closes. The headline use is an LLM token
+### stream — see examples/openrouter-stream.http.
+# @group Streaming
+# @name Streamed NDJSON
+# @stream
+# @assert status == 200
+GET {{bin}}/stream/10
+
 ### Print everything captured so far
 ### IntelliJ treats this block as a comment, so the file stays valid there.
 # @group Utilities

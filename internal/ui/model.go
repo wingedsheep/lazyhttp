@@ -51,6 +51,11 @@ type Model struct {
 	// the spinner only while a step runs and stay completely idle otherwise.
 	spinning bool
 
+	// streamSub is the live subscription for a `# @stream` step in flight, or nil
+	// when nothing is streaming. The model holds it so a disruptive action
+	// (reload, clear, env switch) can Cancel the request mid-stream.
+	streamSub *exec.StreamSub
+
 	// showRequest toggles the request preview (method/URL/headers/body) at the
 	// top of the right pane; showHeaders toggles the response headers above the
 	// body. Both off by default so the response body gets the whole pane.
@@ -159,6 +164,9 @@ func (m *Model) cycleTheme() {
 
 // load (re)reads and parses the plan, resetting results.
 func (m *Model) load() {
+	// A reload or env switch replaces the plan wholesale, so abort any stream in
+	// flight first — its result would land on a step that no longer exists.
+	m.cancelStream()
 	// Discover environments up front, keeping the full outcome (not just the
 	// names): a parse error or an empty result is then explained to the user via
 	// the notice line rather than silently leaving the picker blank.
@@ -230,6 +238,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case exec.ResultMsg:
 		return m.onResult(msg)
 
+	case exec.StreamStartMsg:
+		// The stream is live: hold the handle so a later reload/clear can cancel
+		// it, then start pulling chunks.
+		m.streamSub = msg.Sub
+		return m, exec.WaitForChunk(msg.Sub)
+
+	case exec.StreamChunkMsg:
+		return m.onStreamChunk(msg)
+
+	case exec.StreamDoneMsg:
+		// A cancelled stream finished draining; the result was already handled by
+		// whoever cancelled it, so just drop the subscription.
+		if m.streamSub == msg.Sub {
+			m.streamSub = nil
+		}
+		return m, nil
+
 	case copiedMsg:
 		return m.onCopied(msg)
 
@@ -298,6 +323,9 @@ func (m Model) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 // onResult stores a finished result and advances a run-from-here chain.
 func (m Model) onResult(msg exec.ResultMsg) (tea.Model, tea.Cmd) {
+	// A terminal ResultMsg ends any active stream (only one runs at a time), so
+	// release the subscription. The StreamDoneMsg path covers cancelled streams.
+	m.streamSub = nil
 	if msg.Index < len(m.plan.Results) {
 		r := m.plan.Evaluate(msg.Index, msg.Result)
 		m.plan.Results[msg.Index] = r
@@ -329,6 +357,42 @@ func (m Model) onResult(msg exec.ResultMsg) (tea.Model, tea.Cmd) {
 		m.runFrom = -1
 	}
 	return m, nil
+}
+
+// onStreamChunk appends a streamed slice to its step's (still Running) result
+// and, when that step is selected, re-renders the response pinned to the bottom
+// so the output scrolls as it arrives. It always returns WaitForChunk so the
+// pump goroutine keeps draining even after a reset flips the step's status —
+// the guard only stops us mutating a result that no longer belongs to the
+// stream.
+func (m Model) onStreamChunk(msg exec.StreamChunkMsg) (tea.Model, tea.Cmd) {
+	if msg.Index < len(m.plan.Results) && m.plan.Results[msg.Index].Status == step.Running {
+		r := m.plan.Results[msg.Index]
+		r.Body += msg.Data
+		m.plan.Results[msg.Index] = r
+		if msg.Index < len(m.bodyView) {
+			// Raw, not highlighted: a partial body isn't valid JSON, and SSE/NDJSON
+			// framing should read as-is. The terminal result re-highlights if JSON.
+			m.bodyView[msg.Index] = r.Body
+		}
+		if msg.Index == m.cursor {
+			m.viewport.SetContent(m.formatResult(m.cursor))
+			m.viewport.GotoBottom()
+		}
+	}
+	return m, exec.WaitForChunk(msg.Sub)
+}
+
+// cancelStream aborts an in-flight `# @stream` request, if any. The pump
+// goroutine still drains to completion (WaitForChunk keeps reading after a
+// cancel), so this never leaks; it just stops the network read and tells the
+// wait loop to drop whatever is left. Called before any action that invalidates
+// the running step's result: reload, clear, env switch.
+func (m *Model) cancelStream() {
+	if m.streamSub != nil {
+		m.streamSub.Cancel()
+		m.streamSub = nil
+	}
 }
 
 func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -440,6 +504,11 @@ func (m Model) listKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setBottom()
 	case key.Matches(msg, m.keys.Clear):
 		if m.cursor < len(m.plan.Results) {
+			// Clearing a still-streaming step doubles as "stop": cancel the
+			// request so the cleared result isn't resurrected by late chunks.
+			if m.plan.Results[m.cursor].Status == step.Running {
+				m.cancelStream()
+			}
 			m.plan.Results[m.cursor] = step.Result{}
 			if m.cursor < len(m.bodyView) {
 				m.bodyView[m.cursor] = ""
@@ -562,6 +631,14 @@ func (m *Model) run(i int) tea.Cmd {
 	if i < 0 || i >= len(m.plan.Steps) {
 		return nil
 	}
+	// One step runs at a time. The off-thread design (and the run-from-here
+	// chain, which fires the next step only after the previous result arrives)
+	// relies on this: two concurrent goroutines would race the shared auth cache
+	// and interleave captures into the var map. Refuse to start a second run
+	// — and, crucially, never start a second stream — while one is in flight.
+	if m.anyRunning() {
+		return nil
+	}
 	// Resolve {{vars}} (and any `< file` body) up front. A read failure fails the
 	// step immediately — mirroring a transport error — rather than sending an
 	// empty-bodied request, so the silent-drop footgun becomes a visible error.
@@ -590,12 +667,19 @@ func (m *Model) run(i int) tea.Cmd {
 	if i == m.cursor {
 		m.refreshResult()
 	}
-	// Snapshot the highlight palette on the UI thread so the off-thread
-	// highlighter can't race a theme switch that rebuilds jsonTheme.
-	st := jsonTheme
-	cmd := exec.Run(i, s, m.plan.AuthResolver(s), func(body string) string {
-		return highlightJSON(body, st)
-	})
+	var cmd tea.Cmd
+	if s.Stream && s.Kind == step.KindHTTP {
+		// Streaming delivers many messages; the body arrives raw (no off-thread
+		// highlight pass) and is appended live by onStreamChunk.
+		cmd = exec.RunStream(i, s, m.plan.AuthResolver(s))
+	} else {
+		// Snapshot the highlight palette on the UI thread so the off-thread
+		// highlighter can't race a theme switch that rebuilds jsonTheme.
+		st := jsonTheme
+		cmd = exec.Run(i, s, m.plan.AuthResolver(s), func(body string) string {
+			return highlightJSON(body, st)
+		})
+	}
 	// Wake the spinner only if it isn't already animating, so a run-from-here
 	// chain doesn't stack duplicate tick loops.
 	if !m.spinning {
@@ -686,6 +770,10 @@ func humanBytes(n int) string {
 // now-dropped captures), and stops any active run-from-here chain. keepIdx is
 // the step whose result to preserve, or -1 to clear everything.
 func (m *Model) resetState(keepIdx int) {
+	// A reset wipes results a stream would write into; stop it first. (When a
+	// successful @reset step triggers this, nothing is streaming, so it's a
+	// no-op there.)
+	m.cancelStream()
 	m.plan.Reset(keepIdx)
 	for i := range m.bodyView {
 		if i != keepIdx {

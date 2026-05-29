@@ -530,6 +530,14 @@ func requestOpts(s step.Step) string {
 	if s.NoRedirect {
 		opts = append(opts, "no-redirect")
 	}
+	switch {
+	case s.StreamThrough != "":
+		opts = append(opts, "stream-through "+s.StreamThrough)
+	case s.StreamExtract != "":
+		opts = append(opts, "stream "+s.StreamExtract)
+	case s.Stream:
+		opts = append(opts, "stream")
+	}
 	if len(opts) == 0 {
 		return ""
 	}
@@ -591,7 +599,15 @@ func (m Model) formatResult(i int) string {
 		b.WriteString(key.Render("enter") + m.styles.dim.Render(" run   ·   ") +
 			key.Render("a") + m.styles.dim.Render(" run from here"))
 	case step.Running:
-		b.WriteString(m.spinner.View() + m.styles.dim.Render(" running…"))
+		if r.Body != "" {
+			// A `# @stream` response in flight: show what's arrived so far, raw,
+			// under a live indicator. The chunk handler keeps the viewport pinned
+			// to the bottom so new text scrolls into view.
+			b.WriteString(m.spinner.View() + m.styles.dim.Render(" streaming…") + "\n\n")
+			b.WriteString(r.Body)
+		} else {
+			b.WriteString(m.spinner.View() + m.styles.dim.Render(" running…"))
+		}
 	default:
 		b.WriteString(m.responseSummary(i) + "\n")
 		if r.Err != nil {

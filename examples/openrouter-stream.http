@@ -1,0 +1,85 @@
+# Streaming an LLM completion with lazyhttp
+#
+# A self-contained demo of `# @stream`: lazyhttp reads the response body as it
+# arrives and shows it live, so you watch the model generate token by token in
+# the response pane instead of waiting for the whole reply.
+#
+# The fun twist: the system prompt makes the model answer in "caveman language"
+# — the viral telegraphic style (drop articles, drop filler: "ME WANT", "USE FEW
+# WORD") that people use to cut LLM output tokens by ~40-60%. So you get a tiny,
+# punchy story streaming in, grunt by grunt.
+#
+# Setup: OpenRouter (https://openrouter.ai) gives access to many models behind
+# one OpenAI-compatible API. Create a key and export it before you run —
+# `{{$processEnv …}}` reads it at send time, so no secret lives in this file:
+#
+#   export OPENROUTER_API_KEY=sk-or-...
+#   lazyhttp examples/openrouter-stream.http
+#
+# The raw stream is noisy: keepalive comments (`: OPENROUTER PROCESSING`), the
+# `data:` envelope, and a whole JSON object per token. The two steps below each
+# distil it down to just the text, so you see the story — not the wire framing.
+
+### Caveman story — built-in field extraction
+### `# @stream <jsonpath>` parses the SSE `data:` frames and emits just that
+### field, so the response reads as the assembled story. No external tools.
+# @group AI
+# @name Caveman story (stream + extract)
+# @stream choices[0].delta.content
+# @timeout 5 m
+# @assert status == 200
+POST https://openrouter.ai/api/v1/chat/completions
+Authorization: Bearer {{$processEnv OPENROUTER_API_KEY}}
+Content-Type: application/json
+
+{
+  "model": "anthropic/claude-haiku-4.5",
+  "stream": true,
+  "messages": [
+    { "role": "system", "content": "TALK LIKE CAVEMAN. NO ARTICLE. NO 'THE', NO 'A', NO 'AN'. DROP FILLER WORD. SHORT WORD. GRUNT OK. ME SAVE TOKEN. STILL TELL WHOLE STORY, BEGINNING MIDDLE END." },
+    { "role": "user", "content": "Tell story about startup that raise too much money and forget make product. Make it have a funny punchline." }
+  ]
+}
+
+### Same thing — external command pipe (needs jq)
+### `# @stream-through <cmd>` runs the live stream through any shell command via
+### stdin→stdout. Here jq strips the `data:` envelope, skips comments and the
+### `[DONE]` sentinel, and prints just the delta text. Use this for formats the
+### built-in extractor doesn't cover.
+# @group AI
+# @name Caveman story (stream-through jq)
+# @stream-through jq -Rj --unbuffered 'ltrimstr("data: ") | select(startswith("{")) | fromjson | .choices[0].delta.content // empty'
+# @timeout 5 m
+# @assert status == 200
+POST https://openrouter.ai/api/v1/chat/completions
+Authorization: Bearer {{$processEnv OPENROUTER_API_KEY}}
+Content-Type: application/json
+
+{
+  "model": "anthropic/claude-haiku-4.5",
+  "stream": true,
+  "messages": [
+    { "role": "system", "content": "TALK LIKE CAVEMAN. NO ARTICLE. DROP FILLER WORD. SHORT WORD. GRUNT OK. STILL TELL WHOLE STORY." },
+    { "role": "user", "content": "Tell story about engineer who rewrite everything in Rust to avoid one bug. Make it have a funny punchline." }
+  ]
+}
+
+### For comparison: no transform at all
+### Plain `# @stream` shows the raw SSE wire format as it arrives — handy to see
+### exactly what the server sends (and why the two steps above are nicer).
+# @group AI
+# @name Raw stream (no transform)
+# @stream
+# @timeout 5 m
+# @assert status == 200
+POST https://openrouter.ai/api/v1/chat/completions
+Authorization: Bearer {{$processEnv OPENROUTER_API_KEY}}
+Content-Type: application/json
+
+{
+  "model": "anthropic/claude-haiku-4.5",
+  "stream": true,
+  "messages": [
+    { "role": "user", "content": "Say hello in one short sentence." }
+  ]
+}

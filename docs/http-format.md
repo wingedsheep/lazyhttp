@@ -50,6 +50,7 @@ All directives are `#` comments. They are case-sensitive and use a **single** `#
 | `# @import <path>` | Splice another `.http` file's steps in at this point. See [Composing plans with `@import`](#composing-plans-with-import). |
 | `# @timeout <n> <unit>` | Override the shared 30s timeout for this request. See [Per-request settings](#per-request-settings). |
 | `# @no-redirect` | Don't follow 3xx redirects; return the redirect response itself. See [Per-request settings](#per-request-settings). |
+| `# @stream` | Read the response body incrementally and show it live (SSE, NDJSON, a chunked LLM completion). See [Streaming responses](#streaming-responses). |
 
 You can repeat `# @capture` and `# @assert` as many times as you like in one step.
 Plain `#` comments with no recognized directive are simply ignored.
@@ -362,6 +363,84 @@ GET {{api}}/reports/export
 Both apply identically in the TUI and in headless `lazyhttp run`. When the request
 preview (`i`) is open, an active setting shows as a `⚙ timeout 90s · no-redirect`
 line under the request.
+
+## Streaming responses
+
+`# @stream` opts a step into incremental delivery: instead of waiting for the
+whole response, lazyhttp reads the body as it arrives and appends it to the
+response pane live, scrolling as new text comes in. It's built for endpoints that
+hold a connection open and emit data over time — Server-Sent Events
+(`text/event-stream`), newline-delimited JSON (`application/x-ndjson`), and the
+chunked token streams that LLM chat APIs produce.
+
+```
+### Watch an LLM completion stream in token by token
+# @group AI
+# @name OpenRouter chat (streaming)
+# @stream
+# @timeout 5 m
+# @assert status == 200
+POST https://openrouter.ai/api/v1/chat/completions
+Authorization: Bearer {{$processEnv OPENROUTER_API_KEY}}
+Content-Type: application/json
+
+{
+  "model": "anthropic/claude-haiku-4.5",
+  "stream": true,
+  "messages": [
+    { "role": "user", "content": "In two sentences, what is a terminal UI?" }
+  ]
+}
+```
+
+Run it and the SSE frames (`data: {…}` lines, ending with `data: [DONE]`) fill in
+as the model generates them. Set `OPENROUTER_API_KEY` in your environment first
+(`{{$processEnv …}}` reads it at send time); a runnable copy lives in
+[`examples/openrouter-stream.http`](../examples/openrouter-stream.http).
+
+### Making a stream legible
+
+The raw SSE wire format is noisy — keepalive comments, the `data:` envelope, and
+a whole JSON object per token, when all you want is the text. Two optional
+transforms clean it up, both declared in the step:
+
+**Built-in field extraction** — give `# @stream` a JSON path and lazyhttp parses
+each SSE `data:` frame, drops the comments and the `[DONE]` sentinel, and emits
+just that field. No external tools. The path uses the same JSON-path syntax as
+`# @capture` (see [Expressions](#expressions-used-by-capture-and-the-left-side-of-assert)):
+
+```
+# @stream choices[0].delta.content
+```
+
+So `{"choices":[{"delta":{"content":"hel"}}]}` followed by `{… "content":"lo"}`
+streams in as `hello`.
+
+**External command pipe** — `# @stream-through <command>` runs the live stream
+through any shell command via stdin → stdout, for formats the built-in extractor
+doesn't cover. Here `jq` does the same job:
+
+```
+# @stream-through jq -Rj --unbuffered 'ltrimstr("data: ") | select(startswith("{")) | fromjson | .choices[0].delta.content // empty'
+```
+
+The command runs in your shell (the same one `# @shell` uses); its stdout is
+what you see and what captures/assertions run against. A non-zero exit fails the
+step with the command's stderr. If both are set, `# @stream-through` wins.
+
+Notes:
+
+- **Raw by default.** With neither transform, the body isn't reformatted as JSON
+  — the event framing would be destroyed — so you see exactly what the server sent.
+- **Captures and assertions run on close.** Once the stream ends, `# @capture` and
+  `# @assert` evaluate against the full accumulated (and transformed) body, exactly
+  as for a normal response. (Per-event assertions aren't a thing yet.)
+- **No 30s cap.** A streaming step ignores the shared 30-second client timeout (it
+  would cut the stream off); bound a long one with `# @timeout` instead. Press `c`
+  on a running stream to stop it.
+- **Headless works too.** `lazyhttp run` reads the stream to completion, applies the
+  same transform, and asserts on close, so a streaming step is CI-friendly without
+  changes.
 
 ## Composing plans with `@import`
 

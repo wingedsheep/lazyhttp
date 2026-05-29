@@ -169,6 +169,40 @@ func TestParsePerRequestDirectives(t *testing.T) {
 	}
 }
 
+func TestParseStream(t *testing.T) {
+	cases := []struct {
+		name        string
+		directive   string
+		wantStream  bool
+		wantExtract string
+		wantThrough string
+	}{
+		{"bare", "# @stream", true, "", ""},
+		{"extract", "# @stream choices[0].delta.content", true, "choices[0].delta.content", ""},
+		{"through", "# @stream-through jq -rj '.choices[0].delta.content // empty'", true, "", "jq -rj '.choices[0].delta.content // empty'"},
+		{"none", "", false, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "### S\n"
+			if tc.directive != "" {
+				src += tc.directive + "\n"
+			}
+			src += "GET /events\n"
+			s := Parse(src, Vars{})[0]
+			if s.Stream != tc.wantStream {
+				t.Errorf("Stream = %v, want %v", s.Stream, tc.wantStream)
+			}
+			if s.StreamExtract != tc.wantExtract {
+				t.Errorf("StreamExtract = %q, want %q", s.StreamExtract, tc.wantExtract)
+			}
+			if s.StreamThrough != tc.wantThrough {
+				t.Errorf("StreamThrough = %q, want %q", s.StreamThrough, tc.wantThrough)
+			}
+		})
+	}
+}
+
 func TestParseTimeout(t *testing.T) {
 	cases := []struct {
 		arg  string
