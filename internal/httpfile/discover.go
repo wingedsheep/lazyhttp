@@ -2,6 +2,7 @@ package httpfile
 
 import (
 	"io/fs"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -63,6 +64,7 @@ func DiscoverPlans(root string) PlanIndex {
 		if relErr != nil {
 			rel = path
 		}
+		rel = filepath.ToSlash(rel) // display/filter value; keep it `/`-separated on every OS
 		idx.Files = append(idx.Files, PlanFile{
 			Path: path,
 			Rel:  rel,
@@ -86,9 +88,11 @@ func skipDir(name string) bool {
 }
 
 // relDir is the parent directory of a relative path, normalised to "" for files
-// that sit directly in the root (filepath.Dir reports "." there).
+// that sit directly in the root (path.Dir reports "." there). rel is always
+// slash-separated (see DiscoverPlans), so use path.Dir to stay `/`-separated on
+// every OS rather than filepath.Dir, which would re-introduce `\` on Windows.
 func relDir(rel string) string {
-	dir := filepath.Dir(rel)
+	dir := path.Dir(rel)
 	if dir == "." {
 		return ""
 	}
