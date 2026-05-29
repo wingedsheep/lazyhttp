@@ -17,7 +17,7 @@ func main() {
 	env := flag.String("env", "", "environment name from http-client.env.json")
 	theme := flag.String("theme", "", "colour theme: "+strings.Join(ui.ThemeNames(), ", ")+" (cycle with `t`)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: lazy-http [--env NAME] [--theme NAME] <plan.http>\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: lazyhttp [--env NAME] [--theme NAME] <plan.http>\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
