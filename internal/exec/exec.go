@@ -1,6 +1,7 @@
-// Package exec runs steps as Bubble Tea commands. Each runner returns a
-// tea.Cmd that performs the work off the UI thread and delivers a ResultMsg
-// when it finishes, so the interface never blocks.
+// Package exec runs steps. Do executes a step synchronously and returns its
+// Result; Run wraps Do as a Bubble Tea command that performs the work off the
+// UI thread and delivers a ResultMsg when it finishes, so the interface never
+// blocks.
 package exec
 
 import (
@@ -25,22 +26,27 @@ type AuthResolver interface {
 	Resolve(s *step.Step) error
 }
 
-// Run dispatches a step to the appropriate runner. The work — resolving any auth
-// token, the request (or shell), then highlighting the response body with
-// highlight — all happens off the UI thread inside the returned command, so the
-// interface never blocks even on a large response or a slow token endpoint.
-// auth may be nil (no OAuth2 helper); highlight may be nil to skip highlighting.
-func Run(index int, s step.Step, auth AuthResolver, highlight func(string) string) tea.Cmd {
-	var cmd tea.Cmd
+// Do executes a single step synchronously and returns its Result: an HTTP
+// request (resolving any {{$auth.token(...)}} placeholders via auth first — nil
+// for none) or a shell command. This is the UI-independent execution entry
+// point; Run wraps it as a tea.Cmd for the TUI, while a headless runner calls
+// it directly.
+func Do(s step.Step, auth AuthResolver) step.Result {
 	if s.Kind == step.KindShell {
-		cmd = runShell(index, s)
-	} else {
-		cmd = runHTTP(index, s, auth)
+		return doShell(s)
 	}
+	return doHTTP(s, auth)
+}
+
+// Run dispatches a step to Do off the UI thread, then highlights the response
+// body with highlight (nil to skip) — all inside the returned command, so the
+// interface never blocks even on a large response or a slow token endpoint.
+func Run(index int, s step.Step, auth AuthResolver, highlight func(string) string) tea.Cmd {
 	return func() tea.Msg {
-		msg := cmd().(ResultMsg)
+		res := Do(s, auth)
+		msg := ResultMsg{Index: index, Result: res}
 		if highlight != nil {
-			msg.Highlighted = highlight(msg.Result.Body)
+			msg.Highlighted = highlight(res.Body)
 		}
 		return msg
 	}

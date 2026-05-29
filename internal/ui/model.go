@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -12,10 +10,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/wingedsheep/lazyhttp/internal/auth"
-	"github.com/wingedsheep/lazyhttp/internal/capture"
 	"github.com/wingedsheep/lazyhttp/internal/exec"
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
+	"github.com/wingedsheep/lazyhttp/internal/runner"
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
 
@@ -26,16 +23,20 @@ const (
 	focusResult
 )
 
-// Model is the root Bubble Tea model: the parsed plan, per-step results, and
-// the widgets that render them.
+// Model is the root Bubble Tea model: it drives a runner.Plan (the parsed steps,
+// per-step results, and the variable lifecycle) and the widgets that render it.
 type Model struct {
 	path    string
 	envName string
 
-	steps   []step.Step
-	results []step.Result
-	cursor  int
-	focus   focus
+	// plan is the execution engine: parsed steps, per-step results, and the
+	// variable lifecycle (expand/evaluate/reset). The Model is a consumer of it —
+	// it renders the plan's state and drives it one step at a time. It is never
+	// nil (New seeds an empty Plan) so a load error stays renderable.
+	plan *runner.Plan
+
+	cursor int
+	focus  focus
 
 	// names holds each step's display name with {{vars}} already expanded, and
 	// bodyView holds each response body already syntax-highlighted. Both are
@@ -63,18 +64,6 @@ type Model struct {
 	envNames   []string
 	envPicking bool
 	envCursor  int
-
-	// vars holds env + inline definitions plus values captured from responses
-	// as steps run. Placeholders are expanded against it at execution time.
-	// baseVars is the env+inline snapshot used to drop captures on a reset.
-	vars     httpfile.Vars
-	baseVars httpfile.Vars
-
-	// authConfigs are the OAuth2 configurations from the environment's
-	// Security.Auth block; authCache holds tokens fetched from them, reused
-	// across steps until they expire. Both are rebuilt per load / env switch.
-	authConfigs map[string]auth.Config
-	authCache   *auth.Cache
 
 	// runFrom >= 0 means a "run from here" chain is active; it stops on the
 	// first failure or the end of the plan.
@@ -110,8 +99,11 @@ func New(path, envName string) Model {
 	sp.Spinner = spinner.MiniDot
 
 	m := Model{
-		path:     path,
-		envName:  envName,
+		path:    path,
+		envName: envName,
+		// An empty (non-nil) plan keeps the model renderable if load fails before
+		// it can install the real one.
+		plan:     &runner.Plan{},
 		runFrom:  -1,
 		viewport: viewport.New(0, 0),
 		spinner:  sp,
@@ -142,9 +134,9 @@ func (m *Model) applyStyles() {
 func (m *Model) cycleTheme() {
 	applyTheme(activeTheme + 1)
 	m.applyStyles()
-	for i := range m.results {
+	for i := range m.plan.Results {
 		if i < len(m.bodyView) && m.bodyView[i] != "" {
-			m.bodyView[i] = highlightJSON(m.results[i].Body, jsonTheme)
+			m.bodyView[i] = highlightJSON(m.plan.Results[i].Body, jsonTheme)
 		}
 	}
 	m.refreshResult()
@@ -153,35 +145,21 @@ func (m *Model) cycleTheme() {
 // load (re)reads and parses the plan, resetting results.
 func (m *Model) load() {
 	// The env list drives the picker; ignore errors here so a malformed env
-	// file still surfaces through LoadEnv below rather than blanking the list.
+	// file still surfaces through runner.Load below rather than blanking the list.
 	if names, err := httpfile.LoadEnvNames(m.path); err == nil {
 		m.envNames = names
 	}
-	vars, err := httpfile.LoadEnv(m.path, m.envName)
+	p, err := runner.Load(m.path, m.envName)
 	if err != nil {
 		m.loadErr = err
 		return
 	}
-	steps, err := httpfile.ParseFile(m.path, vars)
-	if err != nil {
-		m.loadErr = err
-		return
-	}
-	// OAuth2 configurations come from the same env file; a fresh token cache per
-	// load/env-switch means switching credentials never reuses a stale token.
-	// Errors here are non-fatal: a malformed Security block just disables auth.
-	m.authConfigs, _ = httpfile.LoadAuth(m.path, m.envName)
-	m.authCache = auth.NewCache()
-
 	m.loadErr = nil
-	m.vars = vars                // env + inline defs; captures layer on as steps run
-	m.baseVars = cloneVars(vars) // pristine copy to restore when state is reset
-	m.steps = steps
-	m.results = make([]step.Result, len(steps))
-	m.bodyView = make([]string, len(steps))
+	m.plan = p
+	m.bodyView = make([]string, len(p.Steps))
 	m.refreshLabels()
-	if m.cursor >= len(steps) {
-		m.cursor = max(0, len(steps)-1)
+	if m.cursor >= len(p.Steps) {
+		m.cursor = max(0, len(p.Steps)-1)
 	}
 }
 
@@ -259,9 +237,9 @@ func (m Model) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 // onResult stores a finished result and advances a run-from-here chain.
 func (m Model) onResult(msg exec.ResultMsg) (tea.Model, tea.Cmd) {
-	if msg.Index < len(m.results) {
-		r := m.evaluate(msg.Index, msg.Result)
-		m.results[msg.Index] = r
+	if msg.Index < len(m.plan.Results) {
+		r := m.plan.Evaluate(msg.Index, msg.Result)
+		m.plan.Results[msg.Index] = r
 		if msg.Index < len(m.bodyView) {
 			// Highlighting was done off the UI thread inside the exec command.
 			m.bodyView[msg.Index] = msg.Highlighted
@@ -271,7 +249,7 @@ func (m Model) onResult(msg exec.ResultMsg) (tea.Model, tea.Cmd) {
 		// A successful @reset step returns the plan to a clean slate: every
 		// other step's result is cleared and captured variables are dropped,
 		// mirroring the backend reset the step just performed.
-		if msg.Index < len(m.steps) && m.steps[msg.Index].Reset && r.OK() {
+		if msg.Index < len(m.plan.Steps) && m.plan.Steps[msg.Index].Reset && r.OK() {
 			m.resetState(msg.Index)
 		}
 	}
@@ -283,7 +261,7 @@ func (m Model) onResult(msg exec.ResultMsg) (tea.Model, tea.Cmd) {
 	// status, or a failed assertion) or we're done.
 	if m.runFrom >= 0 && msg.Index == m.runFrom {
 		next := msg.Index + 1
-		if msg.Index < len(m.results) && m.results[msg.Index].OK() && next < len(m.steps) {
+		if msg.Index < len(m.plan.Results) && m.plan.Results[msg.Index].OK() && next < len(m.plan.Steps) {
 			m.runFrom = next
 			return m, m.run(next)
 		}
@@ -377,8 +355,8 @@ func (m Model) listKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Bottom):
 		m.setBottom()
 	case key.Matches(msg, m.keys.Clear):
-		if m.cursor < len(m.results) {
-			m.results[m.cursor] = step.Result{}
+		if m.cursor < len(m.plan.Results) {
+			m.plan.Results[m.cursor] = step.Result{}
 			if m.cursor < len(m.bodyView) {
 				m.bodyView[m.cursor] = ""
 			}
@@ -487,19 +465,19 @@ func indexOf(names []string, s string) int {
 // run marks a step running and returns the command that executes it, with all
 // {{vars}} expanded against the current variable set (including captures).
 func (m *Model) run(i int) tea.Cmd {
-	if i < 0 || i >= len(m.steps) {
+	if i < 0 || i >= len(m.plan.Steps) {
 		return nil
 	}
 	// Resolve {{vars}} (and any `< file` body) up front. A read failure fails the
 	// step immediately — mirroring a transport error — rather than sending an
 	// empty-bodied request, so the silent-drop footgun becomes a visible error.
-	s, err := m.expand(m.steps[i])
+	s, err := m.plan.Expand(m.plan.Steps[i])
 	if err != nil {
 		return func() tea.Msg {
 			return exec.ResultMsg{Index: i, Result: step.Result{Status: step.Failed, Err: err}}
 		}
 	}
-	m.results[i] = step.Result{Status: step.Running}
+	m.plan.Results[i] = step.Result{Status: step.Running}
 	if i < len(m.bodyView) {
 		m.bodyView[i] = ""
 	}
@@ -509,7 +487,7 @@ func (m *Model) run(i int) tea.Cmd {
 	// Snapshot the highlight palette on the UI thread so the off-thread
 	// highlighter can't race a theme switch that rebuilds jsonTheme.
 	st := jsonTheme
-	cmd := exec.Run(i, s, m.authResolver(s), func(body string) string {
+	cmd := exec.Run(i, s, m.plan.AuthResolver(s), func(body string) string {
 		return highlightJSON(body, st)
 	})
 	// Wake the spinner only if it isn't already animating, so a run-from-here
@@ -521,166 +499,26 @@ func (m *Model) run(i int) tea.Cmd {
 	return cmd
 }
 
-// expand returns a copy of s with its URL, headers and body resolved against
-// the current variables. Captures are left untouched (they target the response).
-//
-// When the step's body comes from a file (`< path` / `<@ path`), the file is
-// read here — where the variable set is available — and its contents become the
-// body. `<@` additionally expands {{vars}} in those contents; `<` sends them
-// verbatim. The path is resolved relative to the plan file's directory. A read
-// error is returned so the caller can surface it as a failed result rather than
-// silently sending an empty body. BodyFile is kept on the returned step (now
-// holding the var-expanded path) for the request preview.
-func (m Model) expand(s step.Step) (step.Step, error) {
-	expand := func(in string) string { return m.vars.ExpandFunc(in, m.resolveResponseRef) }
-
-	s.URL = expand(s.URL)
-	headers := make(map[string]string, len(s.Headers))
-	for k, v := range s.Headers {
-		headers[k] = expand(v)
-	}
-	s.Headers = headers
-
-	if s.BodyFile == "" {
-		s.Body = expand(s.Body)
-		return s, nil
-	}
-
-	path := expand(s.BodyFile)
-	s.BodyFile = path
-	full := path
-	if !filepath.IsAbs(full) {
-		full = filepath.Join(filepath.Dir(m.path), full)
-	}
-	data, err := os.ReadFile(full)
-	if err != nil {
-		return s, err
-	}
-	body := string(data)
-	if s.BodyFileVars {
-		body = expand(body)
-	}
-	s.Body = body
-	return s, nil
-}
-
-// authResolver returns an exec.AuthResolver for the expanded step s, or nil when
-// the step has no {{$auth.token(...)}} reference or no Security.Auth
-// configurations are defined. Configuration values are expanded here, on the UI
-// thread, so a client secret sourced from `{{$processEnv …}}` or another
-// variable is resolved against the live var set without racing the request
-// goroutine; only the token fetch itself runs off-thread.
-func (m Model) authResolver(s step.Step) exec.AuthResolver {
-	if len(m.authConfigs) == 0 {
-		return nil
-	}
-	referenced := auth.References(s.URL) || auth.References(s.Body)
-	for _, v := range s.Headers {
-		if referenced {
-			break
-		}
-		referenced = auth.References(v)
-	}
-	if !referenced {
-		return nil
-	}
-
-	expand := func(in string) string { return m.vars.ExpandFunc(in, m.resolveResponseRef) }
-	cfgs := make(map[string]auth.Config, len(m.authConfigs))
-	for id, c := range m.authConfigs {
-		c.TokenURL = expand(c.TokenURL)
-		c.AuthURL = expand(c.AuthURL)
-		c.ClientID = expand(c.ClientID)
-		c.ClientSecret = expand(c.ClientSecret)
-		c.Scope = expand(c.Scope)
-		c.Username = expand(c.Username)
-		c.Password = expand(c.Password)
-		cfgs[id] = c
-	}
-	return auth.NewResolver(cfgs, m.authCache)
-}
-
-// resolveResponseRef resolves an inline response reference — VS Code REST Client
-// syntax such as {{login.response.body.$.token}} or
-// {{login.response.headers.Location}} — against the stored result of an earlier
-// named step. It maps the reference onto a capture expression and reuses
-// capture.Eval, so JSON paths and header lookups behave exactly as in
-// `# @capture`. ok is false for tokens that aren't response references, name an
-// unrun step, or can't be resolved, so Expand leaves them untouched.
-func (m Model) resolveResponseRef(token string) (string, bool) {
-	name, rest, ok := strings.Cut(token, ".response.")
-	if !ok {
-		return "", false
-	}
-	r, ok := m.lastResult(name)
-	if !ok {
-		return "", false
-	}
-	var expr string
-	switch {
-	case rest == "body" || rest == "body.*":
-		expr = "body"
-	case strings.HasPrefix(rest, "body."):
-		expr = strings.TrimPrefix(rest, "body.") // e.g. "$.token", "items[0].id"
-	case strings.HasPrefix(rest, "headers."):
-		expr = "header." + strings.TrimPrefix(rest, "headers.")
-	default:
-		return "", false
-	}
-	return capture.Eval(expr, r)
-}
-
-// lastResult returns the result of the most recently positioned step named name
-// that has already run. Scanning from the bottom means a reference picks up the
-// latest result when a name is reused across the plan.
-func (m Model) lastResult(name string) (step.Result, bool) {
-	for i := len(m.steps) - 1; i >= 0; i-- {
-		if m.steps[i].Name == name && i < len(m.results) && m.results[i].Status != step.Pending {
-			return m.results[i], true
-		}
-	}
-	return step.Result{}, false
-}
-
-// evaluate runs a finished step's captures and assertions, returning the result
-// enriched with assertion outcomes. Captures populate the variable set so later
-// steps can reference them.
-func (m *Model) evaluate(i int, r step.Result) step.Result {
-	if r.Err != nil {
-		return r
-	}
-	for _, c := range m.steps[i].Captures {
-		if val, ok := capture.Eval(c.Expr, r); ok {
-			m.vars[c.Name] = val
-		}
-	}
-	for _, a := range m.steps[i].Asserts {
-		r.Asserts = append(r.Asserts, capture.Check(a, r))
-	}
-	return r
-}
-
-// resetState clears every step's result (except keepIdx, pass -1 to clear all)
-// and drops captured variables back to the env+inline baseline. It also stops
-// any active run-from-here chain.
+// resetState returns the plan to a clean slate after a successful @reset step:
+// the engine clears the other results and drops captures back to baseline, then
+// the UI clears the matching cached bodies, rebuilds labels (which may reference
+// now-dropped captures), and stops any active run-from-here chain. keepIdx is
+// the step whose result to preserve, or -1 to clear everything.
 func (m *Model) resetState(keepIdx int) {
-	for i := range m.results {
+	m.plan.Reset(keepIdx)
+	for i := range m.bodyView {
 		if i != keepIdx {
-			m.results[i] = step.Result{}
-			if i < len(m.bodyView) {
-				m.bodyView[i] = ""
-			}
+			m.bodyView[i] = ""
 		}
 	}
-	m.vars = cloneVars(m.baseVars)
-	m.refreshLabels() // names may reference now-dropped captures
+	m.refreshLabels()
 	m.runFrom = -1
 }
 
 // anyRunning reports whether at least one step is mid-flight.
 func (m Model) anyRunning() bool {
-	for i := range m.results {
-		if m.results[i].Status == step.Running {
+	for i := range m.plan.Results {
+		if m.plan.Results[i].Status == step.Running {
 			return true
 		}
 	}
@@ -690,26 +528,17 @@ func (m Model) anyRunning() bool {
 // refreshLabels recomputes each step's display name with the current variables
 // expanded, so the list can render without re-running the regex per frame.
 func (m *Model) refreshLabels() {
-	m.names = make([]string, len(m.steps))
-	for i, s := range m.steps {
+	m.names = make([]string, len(m.plan.Steps))
+	for i, s := range m.plan.Steps {
 		name := s.Name
 		if s.Kind != step.KindShell {
-			name = m.vars.Expand(s.Name)
+			name = m.plan.Vars.Expand(s.Name)
 		}
 		if s.Reset {
 			name = "⟲ " + name
 		}
 		m.names[i] = name
 	}
-}
-
-// cloneVars returns an independent copy of a variable set.
-func cloneVars(v httpfile.Vars) httpfile.Vars {
-	out := make(httpfile.Vars, len(v))
-	for k, val := range v {
-		out[k] = val
-	}
-	return out
 }
 
 // moveCursor steps delta positions through the currently visible (filtered)
@@ -743,19 +572,19 @@ func (m *Model) setBottom() {
 }
 
 func (m *Model) setCursor(i int) {
-	if len(m.steps) == 0 {
+	if len(m.plan.Steps) == 0 {
 		return
 	}
-	m.cursor = min(max(i, 0), len(m.steps)-1)
+	m.cursor = min(max(i, 0), len(m.plan.Steps)-1)
 	m.refreshResult()
 }
 
 // visible returns the absolute indices of steps that pass the active filter, in
 // order. With no filter every step is visible.
 func (m Model) visible() []int {
-	out := make([]int, 0, len(m.steps))
+	out := make([]int, 0, len(m.plan.Steps))
 	q := strings.ToLower(m.filter)
-	for i, s := range m.steps {
+	for i, s := range m.plan.Steps {
 		if q == "" {
 			out = append(out, i)
 			continue

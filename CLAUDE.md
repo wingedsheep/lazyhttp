@@ -42,10 +42,22 @@ The data flows in one direction: **parse → expand → execute → evaluate →
   next to the plan supplies named environments. `Vars.Expand` leaves unknown `{{vars}}`
   untouched on purpose so the user can see what failed to resolve.
 
-- **`internal/exec`** — executes a step as a `tea.Cmd` that runs off the UI thread and
-  delivers a `ResultMsg{Index, Result}` when done (so the TUI never blocks). `http.go` does
-  the HTTP request (shared 30s-timeout client, pretty-prints JSON bodies); `shell.go` runs
-  the body via `$SHELL -c`, capturing combined stdout+stderr and the exit code.
+- **`internal/exec`** — runs a single step. `Do(step, auth)` executes it synchronously and
+  returns a `step.Result` (the UI-independent entry point); `Run` wraps `Do` as a `tea.Cmd`
+  that runs off the UI thread and delivers a `ResultMsg{Index, Result}` when done (so the TUI
+  never blocks). `http.go` does the HTTP request (shared 30s-timeout client, pretty-prints
+  JSON bodies); `shell.go` runs the body via `$SHELL -c`, capturing combined stdout+stderr
+  and the exit code.
+
+- **`internal/runner`** — the UI-independent execution engine. A `Plan` owns the parsed
+  steps, per-step results, the plan-file dir, and the variable set (`Vars` + the pristine
+  `BaseVars` baseline). The whole variable lifecycle lives here as methods on `*Plan`:
+  `Expand` (resolve `{{vars}}`, dynamic vars, inline response refs, and `< file` bodies),
+  `Evaluate` (run `@capture` into `Vars` and `@assert` against the result),
+  `ResolveResponseRef`/`LastResult`, `Reset` (`@reset` semantics), and `AuthResolver`.
+  `RunAll(ctx)` executes the whole plan top-to-bottom (capture→assert→reset, stop on the
+  first non-OK step) for headless use. `internal/ui` constructs a `Plan` and delegates, so
+  capture/assert/reset semantics live in exactly one place.
 
 - **`internal/capture`** — evaluates capture/assert expressions against a `Result`:
   `status`, `body`, `header.Name`, or a JSON path (`json.a.b[0].c`, `$.a`, or bare `a.b`).
@@ -57,29 +69,32 @@ The data flows in one direction: **parse → expand → execute → evaluate →
   step's URL/headers/body by fetching a token from the config's Token URL. A
   thread-safe `Cache` reuses tokens until `expires_in` lapses. Only the Client
   Credentials and Password grants are implemented (no browser round-trip). Wired in
-  off the UI thread through the `exec.AuthResolver` hook in `runHTTP`; `ui/model.go`
-  expands config values on the UI thread (so secrets resolve without racing the
-  request goroutine) then hands a `Resolver` to `exec.Run`.
+  through `runner.Plan.AuthResolver`, which expands config values (so secrets resolve
+  without racing the request goroutine) and hands a `Resolver` — satisfying
+  `exec.AuthResolver` — to the executor; only the token fetch runs off-thread.
 
-- **`internal/ui`** — the Bubble Tea root. `model.go` is the heart: it owns the parsed
-  steps, per-step results, the cursor, and the **`vars` map** that accumulates captured
-  values as steps run. `view.go` renders the two-pane layout, `styles.go`/`json.go` handle
-  theming and JSON highlighting, `keys.go` defines the keymap.
+- **`internal/ui`** — the Bubble Tea root. `model.go` is the heart: it holds a
+  `*runner.Plan` (the steps, results, and variable lifecycle) and drives it, owning the
+  cursor, filter, run-from-here chain, and the rendering caches. The plan, not the model,
+  is the source of truth for steps/results/vars. `view.go` renders the two-pane layout,
+  `styles.go`/`json.go` handle theming and JSON highlighting, `keys.go` defines the keymap.
 
 - **`internal/config`** — persists the chosen theme to the OS user-config dir
   (`lazy-http/config.json`); best-effort, never fatal.
 
 ### Key behaviors worth knowing before editing
 
-- **Variable lifecycle (`ui/model.go`):** `vars` = env file + inline `@defs` + values captured
-  from responses. `baseVars` is the pristine env+inline snapshot. Expansion against `vars`
-  happens in `expand()` at the moment a step runs, so a capture from step N is visible to
-  step N+1. `evaluate()` runs captures and assertions after a result arrives.
+- **Variable lifecycle (`runner.Plan`):** `Vars` = env file + inline `@defs` + values captured
+  from responses. `BaseVars` is the pristine env+inline snapshot. Expansion against `Vars`
+  happens in `Plan.Expand()` at the moment a step runs, so a capture from step N is visible to
+  step N+1. `Plan.Evaluate()` runs captures and assertions after a result arrives. The TUI
+  calls these via its `*runner.Plan`; `ui.Model.onResult` is the wiring that invokes them.
 
-- **`@reset` and reset semantics:** a successful step marked `@reset` calls `resetState()`,
-  which clears all *other* results and drops captured vars back to `baseVars` — mirroring a
-  backend reset the request just performed. `C` (clear all) and switching environment do the
-  same reset.
+- **`@reset` and reset semantics:** a successful step marked `@reset` calls `Plan.Reset()`,
+  which clears all *other* results and drops captured vars back to `BaseVars` — mirroring a
+  backend reset the request just performed. In the TUI, `ui.Model.resetState()` wraps it to
+  also clear the cached bodies and stop the chain. `C` (clear all) and switching environment
+  do the same reset.
 
 - **"Run from here" chaining:** `runFrom` (−1 = inactive) drives the `a` key. `onResult`
   advances to the next step only while the current one's `Result.OK()` holds; the chain

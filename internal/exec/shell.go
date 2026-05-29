@@ -8,40 +8,36 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
 
-// runShell executes the step's body via the user's shell, capturing combined
-// stdout+stderr and the exit code. The shell itself is chosen per-OS by
-// shellCommand (see shell_unix.go / shell_windows.go); everything else here —
-// timing, output capture, exit-code handling — is platform-neutral.
-func runShell(index int, s step.Step) tea.Cmd {
-	return func() tea.Msg {
-		start := time.Now()
+// doShell executes the step's body via the user's shell, capturing combined
+// stdout+stderr and the exit code into a Result. The shell itself is chosen
+// per-OS by shellCommand (see shell_unix.go / shell_windows.go); everything else
+// here — timing, output capture, exit-code handling — is platform-neutral.
+func doShell(s step.Step) step.Result {
+	start := time.Now()
 
-		cmd := shellCommand(s.Body)
-		cmd.Env = os.Environ()
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
+	cmd := shellCommand(s.Body)
+	cmd.Env = os.Environ()
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
 
-		err := cmd.Run()
-		res := step.Result{
-			Status:   step.Done,
-			ExitCode: cmd.ProcessState.ExitCode(),
-			Body:     out.String(),
-			Duration: time.Since(start),
-		}
-		if err != nil {
-			res.Status = step.Failed
-			if _, isExit := err.(*exec.ExitError); !isExit {
-				res.Err = err // spawn failure, not just a non-zero exit
-			}
-		}
-		return ResultMsg{Index: index, Result: res}
+	err := cmd.Run()
+	res := step.Result{
+		Status:   step.Done,
+		ExitCode: cmd.ProcessState.ExitCode(),
+		Body:     out.String(),
+		Duration: time.Since(start),
 	}
+	if err != nil {
+		res.Status = step.Failed
+		if _, isExit := err.(*exec.ExitError); !isExit {
+			res.Err = err // spawn failure, not just a non-zero exit
+		}
+	}
+	return res
 }
 
 // prettyJSON indents a JSON body for readability; non-JSON content is returned

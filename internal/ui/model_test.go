@@ -1,18 +1,15 @@
 package ui
 
 import (
-	"net/http"
-	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/wingedsheep/lazyhttp/internal/auth"
 	"github.com/wingedsheep/lazyhttp/internal/exec"
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
+	"github.com/wingedsheep/lazyhttp/internal/runner"
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
 
@@ -24,7 +21,7 @@ func TestRender(t *testing.T) {
 	if m.loadErr != nil {
 		t.Fatalf("load error: %v", m.loadErr)
 	}
-	if len(m.steps) == 0 {
+	if len(m.plan.Steps) == 0 {
 		t.Fatal("no steps parsed from example.http")
 	}
 
@@ -51,7 +48,7 @@ func TestRequestPreviewToggle(t *testing.T) {
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	// Move the cursor to the "Create product" step (the one with a JSON body).
 	const bodyMarker = "price"
-	for range indexOfBody(m.steps, bodyMarker) {
+	for range indexOfBody(m.plan.Steps, bodyMarker) {
 		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	}
 
@@ -161,13 +158,18 @@ func TestEnvPickerFitsTerminal(t *testing.T) {
 	}
 }
 
+// newModel builds a Model wired to the given plan, for the chain/reset wiring
+// tests that drive onResult directly (no Bubble Tea harness).
+func newModel(p *runner.Plan, runFrom int) Model {
+	return Model{plan: p, runFrom: runFrom}
+}
+
 // TestRunFromHereChains verifies the run-from-here chain stops on failure.
 func TestRunFromHereChains(t *testing.T) {
-	m := Model{
-		steps:   []step.Step{{Name: "a"}, {Name: "b"}, {Name: "c"}},
-		results: make([]step.Result, 3),
-		runFrom: 0,
-	}
+	m := newModel(&runner.Plan{
+		Steps:   []step.Step{{Name: "a"}, {Name: "b"}, {Name: "c"}},
+		Results: make([]step.Result, 3),
+	}, 0)
 	// A successful result at index 0 should request the next step.
 	_, cmd := m.onResult(exec.ResultMsg{Index: 0, Result: step.Result{Status: step.Done, StatusCode: 200}})
 	if cmd == nil {
@@ -182,201 +184,25 @@ func TestRunFromHereChains(t *testing.T) {
 	}
 }
 
-// TestCaptureFlowsIntoLaterStep verifies a value captured from one response is
-// expanded into a subsequent step's request.
-func TestCaptureFlowsIntoLaterStep(t *testing.T) {
-	m := Model{
-		vars: httpfile.Vars{"host": "http://api"},
-		steps: []step.Step{
-			{
-				Kind:     step.KindHTTP,
-				Method:   "POST",
-				URL:      "{{host}}/posts",
-				Captures: []step.Capture{{Name: "postId", Expr: "json.id"}},
-			},
-			{Kind: step.KindHTTP, Method: "GET", URL: "{{host}}/posts/{{postId}}"},
-		},
-		results: make([]step.Result, 2),
-	}
-
-	// Step 0 returns an id; the capture should populate vars["postId"].
-	m.onResult(exec.ResultMsg{Index: 0, Result: step.Result{
-		Status: step.Done, StatusCode: 201, Body: `{"id": 42}`,
-	}})
-	if m.vars["postId"] != "42" {
-		t.Fatalf("capture not stored, vars = %v", m.vars)
-	}
-
-	// Step 1's request should now expand using the captured value.
-	expanded, err := m.expand(m.steps[1])
-	if err != nil {
-		t.Fatalf("expand: %v", err)
-	}
-	got := expanded.URL
-	if got != "http://api/posts/42" {
-		t.Errorf("expanded URL = %q, want http://api/posts/42", got)
-	}
-}
-
-// TestExpandBodyFromFile verifies a `< file` body is read relative to the plan
-// directory and sent verbatim, while a `<@ file` body has its {{vars}} expanded.
-func TestExpandBodyFromFile(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "body.json"), []byte(`{"name":"{{who}}"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	m := Model{
-		path: filepath.Join(dir, "plan.http"),
-		vars: httpfile.Vars{"who": "ada"},
-	}
-
-	// `<` sends the file verbatim — placeholders stay raw.
-	plain, err := m.expand(step.Step{Kind: step.KindHTTP, BodyFile: "body.json"})
-	if err != nil {
-		t.Fatalf("expand plain: %v", err)
-	}
-	if plain.Body != `{"name":"{{who}}"}` {
-		t.Errorf("plain body = %q, want raw placeholder", plain.Body)
-	}
-
-	// `<@` expands {{vars}} in the file contents.
-	expanded, err := m.expand(step.Step{Kind: step.KindHTTP, BodyFile: "body.json", BodyFileVars: true})
-	if err != nil {
-		t.Fatalf("expand vars: %v", err)
-	}
-	if expanded.Body != `{"name":"ada"}` {
-		t.Errorf("expanded body = %q, want vars resolved", expanded.Body)
-	}
-
-	// A missing file surfaces as an error so the step can fail visibly.
-	if _, err := m.expand(step.Step{Kind: step.KindHTTP, BodyFile: "nope.json"}); err == nil {
-		t.Error("expected an error for a missing body file")
-	}
-}
-
-// TestAuthResolver verifies the UI builds an OAuth2 resolver only for steps that
-// reference {{$auth.token}}, expands config values (here a {{var}} client
-// secret) on the UI thread, and that the resulting resolver fetches and attaches
-// a token end-to-end.
-func TestAuthResolver(t *testing.T) {
-	var gotSecret string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		gotSecret = r.PostForm.Get("client_secret")
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"access_token":"ABC","expires_in":3600}`))
-	}))
-	defer srv.Close()
-
-	m := Model{
-		vars:      httpfile.Vars{"secret": "sssh"},
-		authCache: auth.NewCache(),
-		authConfigs: map[string]auth.Config{
-			"demo": {
-				GrantType:         "Client Credentials",
-				TokenURL:          srv.URL,
-				ClientID:          "id",
-				ClientSecret:      "{{secret}}", // expanded on the UI thread
-				ClientCredentials: "in body",
-			},
-		},
-	}
-
-	// A step with no auth reference gets no resolver.
-	if r := m.authResolver(step.Step{URL: "http://x", Headers: map[string]string{}}); r != nil {
-		t.Error("expected nil resolver for a step without an $auth reference")
-	}
-
-	// A step that references the token gets a resolver that fetches and attaches it.
-	s := step.Step{
-		Kind:    step.KindHTTP,
-		URL:     "http://x",
-		Headers: map[string]string{"Authorization": `Bearer {{$auth.token("demo")}}`},
-	}
-	r := m.authResolver(s)
-	if r == nil {
-		t.Fatal("expected a resolver for a step referencing $auth.token")
-	}
-	if err := r.Resolve(&s); err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if s.Headers["Authorization"] != "Bearer ABC" {
-		t.Errorf("token not attached, header = %q", s.Headers["Authorization"])
-	}
-	if gotSecret != "sssh" {
-		t.Errorf("client secret not expanded on the UI thread, server saw %q", gotSecret)
-	}
-}
-
-// TestResponseRefFlowsIntoLaterStep verifies inline response references
-// ({{name.response.body.$.path}}, {{name.response.headers.X}}) resolve against an
-// earlier named step's stored result, the way VS Code REST Client plans expect.
-func TestResponseRefFlowsIntoLaterStep(t *testing.T) {
-	m := Model{
-		vars: httpfile.Vars{"host": "http://api"},
-		steps: []step.Step{
-			{Name: "login", Kind: step.KindHTTP, Method: "POST", URL: "{{host}}/login"},
-			{
-				Kind:    step.KindHTTP,
-				Method:  "GET",
-				URL:     "{{host}}/me/{{login.response.body.$.id}}",
-				Headers: map[string]string{"Authorization": "Bearer {{login.response.body.token}}"},
-				Body:    "loc={{login.response.headers.Location}}",
-			},
-		},
-		results: make([]step.Result, 2),
-	}
-
-	// The login response carries a token, an id, and a Location header.
-	hdr := http.Header{}
-	hdr.Set("Location", "/sessions/9")
-	m.onResult(exec.ResultMsg{Index: 0, Result: step.Result{
-		Status: step.Done, StatusCode: 200,
-		Body:   `{"token":"abc","id":7}`,
-		Header: hdr,
-	}})
-
-	got, err := m.expand(m.steps[1])
-	if err != nil {
-		t.Fatalf("expand: %v", err)
-	}
-	if got.URL != "http://api/me/7" {
-		t.Errorf("URL = %q, want http://api/me/7", got.URL)
-	}
-	if got.Headers["Authorization"] != "Bearer abc" {
-		t.Errorf("Authorization = %q, want Bearer abc", got.Headers["Authorization"])
-	}
-	if got.Body != "loc=/sessions/9" {
-		t.Errorf("Body = %q, want loc=/sessions/9", got.Body)
-	}
-
-	// A reference to a step that hasn't run stays literal rather than erroring.
-	unrun := step.Step{Kind: step.KindHTTP, URL: "{{nope.response.body.$.id}}"}
-	if got, _ := m.expand(unrun); got.URL != "{{nope.response.body.$.id}}" {
-		t.Errorf("unresolved ref = %q, want the placeholder untouched", got.URL)
-	}
-}
-
 // TestFailingAssertionStopsChain verifies a failed assertion marks the step not
 // OK and halts a run-from-here chain.
 func TestFailingAssertionStopsChain(t *testing.T) {
-	m := Model{
-		vars: httpfile.Vars{},
-		steps: []step.Step{
+	m := newModel(&runner.Plan{
+		Vars: httpfile.Vars{},
+		Steps: []step.Step{
 			{Kind: step.KindHTTP, Asserts: []step.Assertion{{Expr: "status", Op: "==", Want: "200"}}},
 			{Kind: step.KindHTTP},
 		},
-		results: make([]step.Result, 2),
-		runFrom: 0,
-	}
+		Results: make([]step.Result, 2),
+	}, 0)
 	// The response is 500, so the status==200 assertion fails.
 	_, cmd := m.onResult(exec.ResultMsg{Index: 0, Result: step.Result{
 		Status: step.Done, StatusCode: 500, Body: "{}",
 	}})
-	if m.results[0].AssertsPass() {
+	if m.plan.Results[0].AssertsPass() {
 		t.Error("assertion should have failed")
 	}
-	if m.results[0].OK() {
+	if m.plan.Results[0].OK() {
 		t.Error("step with a failing assertion should not be OK")
 	}
 	if cmd != nil {
@@ -387,33 +213,33 @@ func TestFailingAssertionStopsChain(t *testing.T) {
 // TestResetStepClearsState verifies a successful @reset step clears other steps'
 // results and drops captured variables, while keeping its own result.
 func TestResetStepClearsState(t *testing.T) {
-	m := Model{
-		vars:     httpfile.Vars{"host": "http://api", "token": "stale"},
-		baseVars: httpfile.Vars{"host": "http://api"},
-		steps: []step.Step{
+	m := newModel(&runner.Plan{
+		Vars:     httpfile.Vars{"host": "http://api", "token": "stale"},
+		BaseVars: httpfile.Vars{"host": "http://api"},
+		Steps: []step.Step{
 			{Kind: step.KindHTTP, Reset: true}, // the clear-DB step
 			{Kind: step.KindHTTP},
 		},
-		results: []step.Result{
+		Results: []step.Result{
 			{Status: step.Pending},
 			{Status: step.Done, StatusCode: 200}, // a previously-run step
 		},
-	}
+	}, -1)
 
 	// onResult reassigns the vars map on its returned model, so inspect that.
 	updated, _ := m.onResult(exec.ResultMsg{Index: 0, Result: step.Result{Status: step.Done, StatusCode: 200}})
 	m = updated.(Model)
 
-	if m.results[0].Status != step.Done {
+	if m.plan.Results[0].Status != step.Done {
 		t.Error("the reset step should keep its own result")
 	}
-	if m.results[1].Status != step.Pending {
+	if m.plan.Results[1].Status != step.Pending {
 		t.Error("other steps should be reset to pending")
 	}
-	if _, ok := m.vars["token"]; ok {
+	if _, ok := m.plan.Vars["token"]; ok {
 		t.Error("captured variables should be dropped on reset")
 	}
-	if m.vars["host"] != "http://api" {
+	if m.plan.Vars["host"] != "http://api" {
 		t.Error("base variables should survive a reset")
 	}
 }

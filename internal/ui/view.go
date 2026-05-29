@@ -45,7 +45,7 @@ func (m *Model) layout() {
 
 // refreshResult renders the selected step's request/response into the viewport.
 func (m *Model) refreshResult() {
-	if len(m.steps) == 0 {
+	if len(m.plan.Steps) == 0 {
 		m.viewport.SetContent("")
 		return
 	}
@@ -153,8 +153,8 @@ func (m Model) statusBar() string {
 	// Right side first: env and theme are always shown (so the current choice
 	// is unambiguous even when it's "none"), followed by position and asserts.
 	right := m.barEnv() + m.barTheme()
-	if len(m.steps) > 0 {
-		right += bar.Render(fmt.Sprintf("   %d/%d", m.cursor+1, len(m.steps)))
+	if len(m.plan.Steps) > 0 {
+		right += bar.Render(fmt.Sprintf("   %d/%d", m.cursor+1, len(m.plan.Steps)))
 	}
 	if s := m.assertSummary(); s != "" {
 		right += bar.Render("   ") + s
@@ -247,7 +247,7 @@ func (m Model) renderList() string {
 	cursorLine := 0
 	group := ""
 	for p, i := range vis {
-		if g := m.steps[i].Group; g != group {
+		if g := m.plan.Steps[i].Group; g != group {
 			group = g
 			if group != "" {
 				lines = append(lines, m.styles.group.Render("▌ "+truncate(group, innerW-2)))
@@ -256,7 +256,7 @@ func (m Model) renderList() string {
 		// Tree connector: the last visible step of a group elbows, the rest tee.
 		conn := ""
 		if group != "" {
-			if p == len(vis)-1 || m.steps[vis[p+1]].Group != group {
+			if p == len(vis)-1 || m.plan.Steps[vis[p+1]].Group != group {
 				conn = "╰"
 			} else {
 				conn = "├"
@@ -292,7 +292,7 @@ func (m Model) stepsHeader(innerW int) string {
 		BorderForeground(palette.border)
 
 	label := m.styles.group.Render("STEPS") // accent + bold, like paneHeader
-	total := len(m.steps)
+	total := len(m.plan.Steps)
 	if total == 0 {
 		return box.Render(label)
 	}
@@ -331,8 +331,8 @@ func (m Model) progressBar(w, done, total int) string {
 // failed), used for the progress bar.
 func (m Model) executedCount() int {
 	n := 0
-	for i := range m.results {
-		if s := m.results[i].Status; s == step.Done || s == step.Failed {
+	for i := range m.plan.Results {
+		if s := m.plan.Results[i].Status; s == step.Done || s == step.Failed {
 			n++
 		}
 	}
@@ -344,7 +344,7 @@ func (m Model) executedCount() int {
 // then a right-aligned status code. The selected row paints a solid background
 // across every segment.
 func (m Model) renderRow(i int, conn string, innerW int) string {
-	s := m.steps[i]
+	s := m.plan.Steps[i]
 	sel := i == m.cursor
 
 	caret, caretColor := " ", lipgloss.TerminalColor(palette.subtle)
@@ -383,7 +383,7 @@ func (m Model) renderRow(i int, conn string, innerW int) string {
 // glyph renders the leading status indicator for step i (●/○/✗, or the spinner
 // while running), respecting the selected-row background.
 func (m Model) glyph(i int, sel bool) string {
-	r := m.results[i]
+	r := m.plan.Results[i]
 	if r.Status == step.Running {
 		return m.spinner.View() // already styled by the spinner widget
 	}
@@ -393,7 +393,7 @@ func (m Model) glyph(i int, sel bool) string {
 		case r.Err != nil, !r.AssertsPass():
 			g, c = "✗", palette.danger
 		default:
-			isHTTP := m.steps[i].Kind == step.KindHTTP
+			isHTTP := m.plan.Steps[i].Kind == step.KindHTTP
 			code := r.StatusCode
 			if !isHTTP {
 				code = r.ExitCode
@@ -415,14 +415,14 @@ func methodBadge(s step.Step) (string, lipgloss.TerminalColor) {
 // listStatus returns the right-aligned status text (HTTP code or shell exit
 // code) and its colour. Steps that haven't finished show nothing.
 func (m Model) listStatus(i int) (string, lipgloss.TerminalColor) {
-	r := m.results[i]
+	r := m.plan.Results[i]
 	if r.Status != step.Done && r.Status != step.Failed {
 		return "", palette.subtle
 	}
 	if r.Err != nil {
 		return "ERR", palette.danger
 	}
-	if m.steps[i].Kind == step.KindHTTP {
+	if m.plan.Steps[i].Kind == step.KindHTTP {
 		return strconv.Itoa(r.StatusCode), statusColor(r.StatusCode, true)
 	}
 	return "exit " + strconv.Itoa(r.ExitCode), statusColor(r.ExitCode, false)
@@ -463,8 +463,8 @@ func (m Model) scrollIndicator() string {
 func (m Model) formatResult(i int) string {
 	// expand may fail to read a `< file` body; the preview still shows the
 	// request line and the file reference, with the error noted below.
-	s, expandErr := m.expand(m.steps[i])
-	r := m.results[i]
+	s, expandErr := m.plan.Expand(m.plan.Steps[i])
+	r := m.plan.Results[i]
 	var b strings.Builder
 
 	// Request preview — optional, toggled with `i`. Off by default so the
@@ -565,7 +565,7 @@ func (m Model) cachedBody(i int, r step.Result) string {
 // rendered on the bar's background so it blends into the strip.
 func (m Model) assertSummary() string {
 	var pass, fail int
-	for _, r := range m.results {
+	for _, r := range m.plan.Results {
 		for _, a := range r.Asserts {
 			if a.Pass {
 				pass++
@@ -609,8 +609,8 @@ func (m Model) capturedLines(s step.Step, r step.Result) string {
 // responseSummary is the bold one-liner above the body: method + status (with
 // its reason phrase) for HTTP, or the exit code for shell, plus the duration.
 func (m Model) responseSummary(i int) string {
-	s := m.steps[i]
-	r := m.results[i]
+	s := m.plan.Steps[i]
+	r := m.plan.Results[i]
 	dur := m.styles.dim.Render("  ·  " + r.Duration.Round(time.Millisecond).String())
 
 	if s.Kind == step.KindHTTP {
