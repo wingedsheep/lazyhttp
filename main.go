@@ -1,4 +1,4 @@
-// Command lazy-http is a terminal UI for running .http test plans step by step.
+// Command lazyhttp is a terminal UI for running .http test plans step by step.
 package main
 
 import (
@@ -40,7 +40,7 @@ func main() {
 	}
 
 	model := ui.New(flag.Arg(0), *env)
-	// AltScreen keeps lazy-http full-screen; mouse capture means the wheel
+	// AltScreen keeps lazyhttp full-screen; mouse capture means the wheel
 	// scrolls within the TUI instead of the terminal's scrollback.
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {

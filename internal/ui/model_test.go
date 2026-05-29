@@ -32,7 +32,7 @@ func TestRender(t *testing.T) {
 	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
 
 	out := model.View()
-	for _, want := range []string{"lazy-http", "STEPS", "RESPONSE"} {
+	for _, want := range []string{"lazyhttp", "STEPS", "RESPONSE"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("view missing %q", want)
 		}
@@ -45,8 +45,8 @@ func TestRequestPreviewToggle(t *testing.T) {
 	m := New(filepath.Join("..", "..", "example.http"), "dev")
 	var model tea.Model = m
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	// Move the cursor to the "Create gadget" step (the one with a JSON body).
-	const bodyMarker = "inStock"
+	// Move the cursor to the "Create product" step (the one with a JSON body).
+	const bodyMarker = "price"
 	for range indexOfBody(m.steps, bodyMarker) {
 		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	}

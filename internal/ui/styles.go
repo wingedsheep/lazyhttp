@@ -129,7 +129,7 @@ func SetTheme(name string) bool {
 // styles holds the reusable lipgloss styles. Only the static ones live here;
 // per-row colours are composed on the fly (see cell).
 type styles struct {
-	logo       lipgloss.Style // the "lazy-http" badge in the status bar
+	logo       lipgloss.Style // the "lazyhttp" badge in the status bar
 	barText    lipgloss.Style // status-bar text segments
 	paneHeader lipgloss.Style // STEPS / RESPONSE / ASSERTIONS headers
 	dim        lipgloss.Style

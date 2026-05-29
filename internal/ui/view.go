@@ -61,7 +61,7 @@ func (m Model) View() string {
 			Border(lipgloss.RoundedBorder()).BorderForeground(palette.danger).
 			Padding(0, 1).
 			Render(title + "\n\n" + m.styles.dim.Render(m.loadErr.Error()))
-		return m.styles.logo.Render("lazy-http") + "\n\n" + box + "\n"
+		return m.styles.logo.Render("lazyhttp") + "\n\n" + box + "\n"
 	}
 	if m.width == 0 {
 		return m.styles.dim.Render("loading…")
@@ -163,7 +163,7 @@ func (m Model) statusBar() string {
 
 	// Left side: the file fills whatever width the fixed pieces leave, truncated
 	// so the bar never grows past the terminal and wraps.
-	logo := m.styles.logo.Render("lazy-http")
+	logo := m.styles.logo.Render("lazyhttp")
 	filter := m.barFilter()
 	used := lipgloss.Width(logo) + lipgloss.Width(filter) + lipgloss.Width(right)
 	left := logo + m.barFile(m.width-used) + filter

@@ -1,4 +1,4 @@
-// Package step defines the data model shared across lazy-http: the parsed
+// Package step defines the data model shared across lazyhttp: the parsed
 // steps of a plan and the results of executing them.
 package step
 

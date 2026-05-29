@@ -55,8 +55,8 @@ func TestLayoutFitsHeight(t *testing.T) {
 			t.Errorf("height %d: View is %d lines, exceeds terminal (status bar scrolls off)", h, got)
 		}
 		// The status bar must survive in the rendered frame.
-		if !strings.Contains(model.View(), "lazy-http") {
-			t.Errorf("height %d: status bar (lazy-http) missing from View", h)
+		if !strings.Contains(model.View(), "lazyhttp") {
+			t.Errorf("height %d: status bar (lazyhttp) missing from View", h)
 		}
 	}
 }

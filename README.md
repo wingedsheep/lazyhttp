@@ -1,4 +1,4 @@
-# lazy-http
+# lazyhttp
 
 A terminal UI for running `.http` test plans step by step — like a `lazygit`/`k9s`
 for your HTTP requests. Open any `.http` file (the same format used by the IntelliJ

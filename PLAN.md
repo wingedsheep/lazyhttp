@@ -1,4 +1,4 @@
-# lazy-http
+# lazyhttp
 
 A beautiful terminal UI for running HTTP test plans **step by step** — read the
 same `.http` files you already run in IntelliJ, execute each request manually,
@@ -143,7 +143,7 @@ badge across every step that has run.
 ### Resetting plan state
 
 When you're testing against a backend that has a "clear database" (or similar)
-endpoint, mark that step with `# @reset`. When it runs **successfully**, lazy-http
+endpoint, mark that step with `# @reset`. When it runs **successfully**, lazyhttp
 returns the whole plan to a clean slate: every other step's result reverts to
 *pending* and captured variables are dropped (re-seeded from the env + inline
 defaults). The reset step keeps its own result, and is flagged with a `⟲` marker
@@ -178,7 +178,7 @@ POST {{host}}/posts
 
 To keep a plan in **one IntelliJ-runnable file**, shell steps are expressed as a
 `###` block carrying a `# @shell` directive. IntelliJ treats the whole block as
-a comment + an unreachable request, so the file stays valid there; lazy-http
+a comment + an unreachable request, so the file stays valid there; lazyhttp
 recognizes the directive and runs the body in `$SHELL`.
 
 ```http
@@ -265,7 +265,7 @@ as a `resultMsg{index, Result}`.
 ## 5. Layout & interaction
 
 ```
-┌─ lazy-http ─ example.http ──────────────────────────────────────────────┐
+┌─ lazyhttp ─ example.http ──────────────────────────────────────────────┐
 │ STEPS                       │ RESPONSE                                    │
 │ ──────────────────────────  │ ─────────────────────────────────────────  │
 │ ● 1  GET   /health      200 │ POST /users  →  201 Created   (142ms)       │
@@ -332,9 +332,9 @@ as a `resultMsg{index, Result}`.
 
 ```bash
 mise install                       # provisions Go 1.24 (one time)
-go build -o bin/lazy-http .
-./bin/lazy-http example.http
-./bin/lazy-http --env staging example.http   # uses http-client.env.json
+go build -o bin/lazyhttp .
+./bin/lazyhttp example.http
+./bin/lazyhttp --env staging example.http   # uses http-client.env.json
 ```
 
 ---
