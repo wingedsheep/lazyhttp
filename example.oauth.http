@@ -6,9 +6,18 @@
 # and lazyhttp fetches a token from its Token URL, caches it until it expires,
 # and reuses it across every request in the plan — one token fetch, not twenty.
 #
-# This file is also valid in the IntelliJ HTTP Client. To run it for real, point
-# the "demo" config in http-client.env.json at your own OAuth2 provider and
-# export the secret:  OAUTH_CLIENT_SECRET=… lazyhttp --env dev example.oauth.http
+# This file is also valid in the IntelliJ HTTP Client.
+#
+# Try it locally with no real provider: start the bundled stub server in one
+# terminal and run this plan against it in another —
+#     just demo-server      # token endpoint + echo resource on :9000
+#     just demo             # lazyhttp --env local example.oauth.http
+# The token is fetched once and reused for both requests; each response echoes
+# the Authorization header it received.
+#
+# To run it against a real API, point the "demo" config in http-client.env.json
+# at your own OAuth2 provider and export the secret:
+#     OAUTH_CLIENT_SECRET=… lazyhttp --env dev example.oauth.http
 #
 # Supported grant types: Client Credentials and Password (the two that work
 # without a browser round-trip). The config lives in the env file so secrets stay
