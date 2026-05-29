@@ -29,9 +29,9 @@ func (m *Model) layout() {
 	contentH := m.height - 1 /*title*/ - footerH - 2 /*pane borders*/
 	contentH = max(contentH, 3)
 
-	// Give the step list ~42% of the width (more room for long descriptions),
+	// Give the step list ~50% of the width (more room for long descriptions),
 	// but keep it within sensible bounds so the result pane stays usable.
-	listW := clamp(m.width*42/100-4, 28, 64)
+	listW := clamp(m.width*50/100-4, 28, 92)
 	resultW := m.width - (listW + 4) - 4
 	resultW = max(resultW, 20)
 
