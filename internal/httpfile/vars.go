@@ -40,6 +40,13 @@ const (
 // repo boundary — so it can't escape the project, and at the filesystem root. An
 // empty result means no env file was found.
 func findEnvDir(planPath string) string {
+	// Absolutize first: a bare filename ("plan.http") has dir ".", and
+	// filepath.Dir(".") == ".", so the walk would terminate on its first
+	// iteration and never reach the real ancestor directories. Resolving against
+	// the cwd gives the loop genuine parents to climb.
+	if abs, err := filepath.Abs(planPath); err == nil {
+		planPath = abs
+	}
 	dir := filepath.Dir(planPath)
 	for {
 		for _, name := range []string{envFileName, privateEnvFileName} {

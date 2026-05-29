@@ -62,6 +62,31 @@ func TestLoadEnvNamesAncestor(t *testing.T) {
 	}
 }
 
+// TestLoadEnvNamesRelativePath verifies discovery works for a bare relative plan
+// path (the common `cd <dir> && lazyhttp plan.http` invocation): the walk must
+// absolutize against the cwd before climbing, or filepath.Dir("plan.http") == "."
+// dead-ends it on the first iteration and no ancestor env file is found.
+func TestLoadEnvNamesRelativePath(t *testing.T) {
+	root := t.TempDir()
+	env := `{"ecc-test": {"host": "h"}}`
+	if err := os.WriteFile(filepath.Join(root, "http-client.env.json"), []byte(env), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "feature")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(sub)
+
+	got, err := LoadEnvNames("plan.http")
+	if err != nil {
+		t.Fatalf("LoadEnvNames: %v", err)
+	}
+	if want := []string{"ecc-test"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v (relative path must be absolutized before walking)", got, want)
+	}
+}
+
 // TestLoadEnvNamesClosestWins verifies the walk uses the nearest env file: a
 // subfolder's own http-client.env.json shadows an ancestor's rather than merging.
 func TestLoadEnvNamesClosestWins(t *testing.T) {
