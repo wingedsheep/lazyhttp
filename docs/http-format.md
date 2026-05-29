@@ -212,6 +212,32 @@ Authorization: Bearer {{$auth.token("demo")}}
 > `{{$auth.token(...)}}` with a `Security.Auth` env block stays portable to the
 > IntelliJ HTTP Client. See [`example.oauth.http`](../example.oauth.http).
 
+### Basic authentication
+
+An `Authorization: Basic` header with raw credentials is base64-encoded for you,
+matching the IntelliJ HTTP Client and VS Code REST Client shorthand. `{{vars}}`
+are expanded *before* encoding:
+
+```
+### Space-separated user and password
+GET {{api}}/admin
+Authorization: Basic {{amq_user}} {{amq_pass}}
+```
+
+Three credential forms are recognized after the (case-insensitive) `Basic`
+scheme:
+
+| Header in file | Sent on the wire |
+| --- | --- |
+| `Basic alice s3cret` | `Basic YWxpY2U6czNjcmV0` |
+| `Basic alice:s3cret` | `Basic YWxpY2U6czNjcmV0` |
+| `Basic YWxpY2U6czNjcmV0` (already base64) | `Basic YWxpY2U6czNjcmV0` (unchanged) |
+
+A single token without a colon is assumed already base64-encoded and passes
+through untouched, so there's no double-encoding. A password containing
+whitespace can't be expressed with the space-separated shorthand — use the
+`user:password` colon form or pre-encode it.
+
 ## Request body from a file
 
 Instead of an inline body, a step can load its request body from a file. The
@@ -312,8 +338,7 @@ REST Client, but it implements a focused subset plus its own extensions (`# @gro
 `# @capture`, `# @assert`, `# @shell`, `# @reset`, `# @import`). The features below exist in one
 or both of those tools and are **not supported yet**. A plan using them stays
 parseable — lazyhttp will simply ignore or pass through the unsupported part — but
-it won't behave the way it does in the original tool, so watch for the footguns
-called out below.
+it won't behave the way it does in the original tool.
 
 ### Not supported yet
 
@@ -335,23 +360,19 @@ Each entry lists the upstream syntax and what lazyhttp does with it today.
   with `< ./file` parts. The body text is sent as-is; file parts are not read or attached.
 - **GraphQL requests** — header `X-REQUEST-TYPE: GraphQL` followed by a query and
   variables. No special handling; sent as a plain body.
-- **Auth sugar** — `Authorization: Basic user pass`, `Digest`, `AWS`, Azure AD.
-  Sent verbatim — `Basic user pass` is not base64-encoded, so it goes on the wire
-  un-encoded. Pre-encode it yourself. (OAuth2 *is* supported via `Security.Auth` +
-  `{{$auth.token(...)}}` — see [OAuth2 authentication](#oauth2-authentication) —
-  but only the Client Credentials and Password grants; the interactive grants
-  that need a browser are not.)
+- **Auth sugar** — `Digest`, `AWS`, Azure AD.
+  Sent verbatim — these schemes need request signing, which lazyhttp doesn't do.
+  (`Basic` auth shorthand *is* supported — see
+  [Basic authentication](#basic-authentication) — and OAuth2 *is* supported via
+  `Security.Auth` + `{{$auth.token(...)}}`; see
+  [OAuth2 authentication](#oauth2-authentication) — but only the Client Credentials
+  and Password grants; the interactive grants that need a browser are not.)
 - **`//` comment/directive prefix** — `// @name Foo`.
   Not recognized; lazyhttp directives require a `#` prefix.
 - **Multi-line URLs** — continuation lines starting with `?` / `&`.
   Only the first line is read as the request line.
 - **`$shared` / private env files** — `$shared` env, `http-client.private.env.json`.
   Only `http-client.env.json` is read; the named env is used as-is.
-
-### Footguns worth remembering
-
-- **`Basic` auth isn't encoded.** Provide the already-base64-encoded credentials
-  (`Authorization: Basic dXNlcjpwYXNz`) rather than the `user pass` shorthand.
 
 If you hit one of these and want it supported, it's worth opening an issue —
 several (per-request directives, response references) are good candidates.

@@ -71,6 +71,27 @@ func TestRunHTTPAuth(t *testing.T) {
 	}
 }
 
+// TestRunHTTPBasicAuth verifies the Basic-auth shorthand is base64-encoded on
+// the wire (and that the Authorization header is matched case-insensitively).
+func TestRunHTTPBasicAuth(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	s := step.Step{Kind: step.KindHTTP, Method: "GET", URL: srv.URL,
+		Headers: map[string]string{"authorization": "Basic alice s3cret"}}
+	msg := Run(0, s, nil, nil)().(ResultMsg)
+	if msg.Result.Err != nil {
+		t.Fatalf("unexpected error: %v", msg.Result.Err)
+	}
+	if want := "Basic YWxpY2U6czNjcmV0"; gotAuth != want {
+		t.Errorf("server saw Authorization %q, want %q", gotAuth, want)
+	}
+}
+
 // TestRunHTTPAuthError verifies a resolver error fails the step (no request is
 // sent unauthenticated).
 func TestRunHTTPAuthError(t *testing.T) {

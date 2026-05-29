@@ -44,6 +44,9 @@ func runHTTP(index int, s step.Step, auth AuthResolver) tea.Cmd {
 			return fail(err)
 		}
 		for k, v := range s.Headers {
+			if strings.EqualFold(k, "Authorization") {
+				v = encodeBasicAuth(v)
+			}
 			req.Header.Set(k, v)
 		}
 
