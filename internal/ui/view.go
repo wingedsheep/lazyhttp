@@ -230,7 +230,7 @@ func (m Model) barFilter() string {
 // tree connector so the section nesting reads at a glance.
 func (m Model) renderList() string {
 	innerW := max(m.listW-2, 8) // pane content width, inside its padding
-	header := m.styles.paneHeader.Width(innerW).Render("STEPS")
+	header := m.stepsHeader(innerW)
 
 	vis := m.visible()
 	if len(vis) == 0 {
@@ -278,6 +278,65 @@ func (m Model) renderList() string {
 	}
 
 	return header + "\n" + strings.Join(lines, "\n")
+}
+
+// stepsHeader draws the STEPS pane header with a right-aligned progress bar
+// reporting how many steps have run out of the total. It sits at the top of the
+// (left) list pane so overall progress is obvious at a glance, rather than
+// buried in the far corner of the status bar.
+func (m Model) stepsHeader(innerW int) string {
+	// A bordered box matching paneHeader's underline, but without a foreground so
+	// the pre-coloured label/bar/count segments keep their own colours.
+	box := lipgloss.NewStyle().Width(innerW).
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(palette.border)
+
+	label := m.styles.group.Render("STEPS") // accent + bold, like paneHeader
+	total := len(m.steps)
+	if total == 0 {
+		return box.Render(label)
+	}
+
+	done := m.executedCount()
+	count := m.styles.dim.Render(fmt.Sprintf(" %d/%d", done, total))
+
+	// The bar takes the room between the label and the count, bounded so a wide
+	// pane doesn't stretch it across the whole header.
+	barW := clamp(innerW-lipgloss.Width(label)-lipgloss.Width(count)-1, 0, 18)
+	bar := m.progressBar(barW, done, total)
+
+	gap := max(innerW-lipgloss.Width(label)-barW-lipgloss.Width(count), 1)
+	return box.Render(label + strings.Repeat(" ", gap) + bar + count)
+}
+
+// progressBar renders a w-cell bar with the executed fraction filled. A started
+// step always shows at least one filled cell so early progress is visible.
+func (m Model) progressBar(w, done, total int) string {
+	if w <= 0 {
+		return ""
+	}
+	filled := 0
+	if total > 0 {
+		filled = done * w / total
+		if done > 0 && filled == 0 {
+			filled = 1
+		}
+	}
+	filled = clamp(filled, 0, w)
+	return lipgloss.NewStyle().Foreground(palette.success).Render(strings.Repeat("█", filled)) +
+		m.styles.dim.Render(strings.Repeat("░", w-filled))
+}
+
+// executedCount is the number of steps that have finished running (passed or
+// failed), used for the progress bar.
+func (m Model) executedCount() int {
+	n := 0
+	for i := range m.results {
+		if s := m.results[i].Status; s == step.Done || s == step.Failed {
+			n++
+		}
+	}
+	return n
 }
 
 // renderRow lays out a single step row to exactly innerW columns: an optional
