@@ -3,7 +3,7 @@
 A terminal UI for running `.http` test plans step by step — like a `lazygit`/`k9s`
 for your HTTP requests. Open any `.http` file (the same format used by the IntelliJ
 HTTP Client and the VS Code REST Client), step through requests, capture values,
-and assert on responses.
+assert on responses, and fetch OAuth2 tokens automatically.
 
 ![lazyhttp running the bundled example plan](.github/assets/screenshot.png)
 
@@ -105,6 +105,57 @@ The full `.http` syntax lazyhttp accepts — steps, the `# @name` / `# @group` /
 capture and assertion expressions, and `{{variable}}` resolution — is documented in
 **[docs/http-format.md](docs/http-format.md)**. See [`example.http`](example.http)
 for a complete, runnable tour.
+
+### OAuth2 authentication
+
+For APIs behind OAuth2, lazyhttp fetches and attaches a bearer token for you
+instead of you hand-rolling a login request. It honors the IntelliJ HTTP
+Client's `Security.Auth` block in `http-client.env.json`:
+
+```json
+{
+  "dev": {
+    "api": "https://api.example.com",
+    "Security": {
+      "Auth": {
+        "demo": {
+          "Type": "OAuth2",
+          "Grant Type": "Client Credentials",
+          "Token URL": "https://id.example.com/oauth/token",
+          "Client ID": "demo-client",
+          "Client Secret": "{{$processEnv OAUTH_CLIENT_SECRET}}",
+          "Scope": "read"
+        }
+      }
+    }
+  }
+}
+```
+
+Reference a configuration by id in a request and the token is resolved for you:
+
+```http
+### Protected request
+GET {{api}}/me
+Authorization: Bearer {{$auth.token("demo")}}
+```
+
+The token is fetched once and **cached** for the rest of the session (honoring
+`expires_in`), so a plan of many requests does a single token fetch. Secrets stay
+in the env file — never the plan — and the request preview shows the
+`{{$auth.token(...)}}` placeholder, never the resolved token. Grant types:
+**Client Credentials** and **Password** (the two that work without a browser).
+
+Try it locally with no real provider — a bundled stub server makes
+[`example.oauth.http`](example.oauth.http) runnable end-to-end:
+
+```sh
+just demo-server   # token endpoint + echo resource on :9000
+just demo          # lazyhttp --env local example.oauth.http (in another terminal)
+```
+
+See [OAuth2 authentication](docs/http-format.md#oauth2-authentication) for the
+full reference.
 
 ## Updating
 
