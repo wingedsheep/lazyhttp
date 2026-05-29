@@ -3,6 +3,8 @@ package exec
 import (
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/wingedsheep/lazyhttp/internal/step"
@@ -35,9 +37,17 @@ func TestRunHTTP(t *testing.T) {
 	}
 }
 
-// TestRunShell exercises the shell runner and exit-code capture.
+// TestRunShell exercises the shell runner and exit-code capture. The body is
+// written per-OS because shell steps run through the native shell (PowerShell
+// on Windows, $SHELL/sh elsewhere) and aren't portable; output is compared
+// loosely (trimmed/contains) so trailing-newline conventions don't matter.
 func TestRunShell(t *testing.T) {
-	cmd := Run(1, step.Step{Kind: step.KindShell, Body: "echo hello && exit 3"}, nil)
+	body := "echo hello && exit 3"
+	if runtime.GOOS == "windows" {
+		body = "echo hello; exit 3"
+	}
+
+	cmd := Run(1, step.Step{Kind: step.KindShell, Body: body}, nil)
 	msg := cmd().(ResultMsg)
 	if msg.Result.ExitCode != 3 {
 		t.Errorf("exit code: want 3, got %d", msg.Result.ExitCode)
@@ -45,7 +55,7 @@ func TestRunShell(t *testing.T) {
 	if msg.Result.OK() {
 		t.Error("non-zero exit should not be OK")
 	}
-	if got := msg.Result.Body; got != "hello\n" {
-		t.Errorf("shell output: want %q, got %q", "hello\n", got)
+	if got := strings.TrimSpace(msg.Result.Body); got != "hello" {
+		t.Errorf("shell output: want %q, got %q", "hello", got)
 	}
 }

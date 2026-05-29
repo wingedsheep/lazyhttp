@@ -179,9 +179,11 @@ contents.
 
 ## Shell steps
 
-A step marked `# @shell` runs its body as a script via `$SHELL -c` (falling back
-to `/bin/sh`). `{{vars}}` are expanded first, stdout and stderr are combined into
-the result body, and `status` in an assertion refers to the exit code:
+A step marked `# @shell` runs its body as a script via the platform's shell —
+`$SHELL -c` (falling back to `/bin/sh`) on macOS/Linux, and PowerShell
+(`powershell -NoProfile -Command`) on Windows. `{{vars}}` are expanded first,
+stdout and stderr are combined into the result body, and `status` in an assertion
+refers to the exit code:
 
 ```http
 ### Print captured values
@@ -193,6 +195,11 @@ echo "token = {{token}}"
 
 Because the whole block is a `#`-commented shell directive plus a script, IntelliJ
 and VS Code treat it as a comment and ignore it — so the plan stays portable.
+
+Shell bodies themselves are **not** portable across operating systems: a body
+written for POSIX `sh` (`&&` chaining, `$VAR`, single-quoting) won't all carry
+over to PowerShell. See [Windows notes](#windows-notes) if you share plans across
+platforms.
 
 See [`example.http`](../example.http) for a complete, runnable tour of every feature.
 
@@ -243,3 +250,37 @@ Each entry lists the upstream syntax and what lazyhttp does with it today.
 
 If you hit one of these and want it supported, it's worth opening an issue —
 several (per-request directives, response references) are good candidates.
+
+## Windows notes
+
+lazyhttp runs on Windows as a first-class target. A few things behave
+differently there:
+
+- **`@shell` interpreter is chosen from your environment.** The order is:
+  1. `LAZYHTTP_SHELL`, if set — an explicit override (`cmd`, `powershell`,
+     `bash`, or a full path).
+  2. `$SHELL`, if set — Git Bash, MSYS2, and Cygwin export it (native cmd and
+     PowerShell don't), so launching lazyhttp from one of those Unix-like shells
+     runs `@shell` bodies through `bash -c` automatically, just as on Linux/macOS.
+  3. PowerShell (`powershell -NoProfile -Command <body>`) — the default for a
+     native cmd/PowerShell session.
+
+  So a POSIX-style body works as-is from Git Bash, while a native PowerShell
+  session gets PowerShell. Bodies are still not portable *across* interpreters,
+  so if you share a plan across platforms, keep `@shell` bodies simple (a bare
+  `echo` works everywhere) or write them for the shell you'll actually run on.
+- **CRLF line endings are tolerated.** `.http` plans authored on Windows (with
+  `\r\n` line endings) parse identically to Unix-authored ones — no stray
+  carriage returns leak onto URLs, header values, or captured variables.
+- **Install.** Download `lazyhttp_windows_<arch>.zip` from the
+  [latest release](https://github.com/wingedsheep/lazyhttp/releases/latest),
+  unzip it, and put `lazyhttp.exe` on your `PATH`. Or, with
+  [Scoop](https://scoop.sh):
+
+  ```powershell
+  scoop bucket add wingedsheep https://github.com/wingedsheep/scoop-bucket
+  scoop install lazyhttp
+  ```
+
+  Use Windows Terminal (or modern PowerShell) for correct colors, key handling,
+  and mouse-wheel scrolling.

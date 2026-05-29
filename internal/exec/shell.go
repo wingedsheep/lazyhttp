@@ -14,17 +14,14 @@ import (
 )
 
 // runShell executes the step's body via the user's shell, capturing combined
-// stdout+stderr and the exit code.
+// stdout+stderr and the exit code. The shell itself is chosen per-OS by
+// shellCommand (see shell_unix.go / shell_windows.go); everything else here —
+// timing, output capture, exit-code handling — is platform-neutral.
 func runShell(index int, s step.Step) tea.Cmd {
 	return func() tea.Msg {
 		start := time.Now()
 
-		shell := os.Getenv("SHELL")
-		if shell == "" {
-			shell = "/bin/sh"
-		}
-
-		cmd := exec.Command(shell, "-c", s.Body)
+		cmd := shellCommand(s.Body)
 		cmd.Env = os.Environ()
 		var out bytes.Buffer
 		cmd.Stdout = &out

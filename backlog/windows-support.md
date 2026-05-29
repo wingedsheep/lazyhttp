@@ -9,6 +9,13 @@ additive change, not a rewrite.
 Ordering is by value-per-effort. Phases are independently shippable; each leaves
 the tree building green on all three platforms.
 
+> **Status (2026-05-29):** Phases 1–3 are implemented in the codebase. Phase 1
+> additionally honors `$SHELL` on Windows so Git Bash / MSYS2 / Cygwin sessions
+> run POSIX `@shell` bodies through bash. Phase 3's Scoop bucket and Windows CI
+> are wired up but need a tagged release (and the `SCOOP_BUCKET_TOKEN` secret +
+> `wingedsheep/scoop-bucket` repo) to validate end-to-end. Phase 4 (terminal /
+> path polish) remains open pending real Windows usage.
+
 ## What already works on Windows
 
 - **TUI core.** Bubble Tea / Lip Gloss support the Windows Terminal, ConHost, and

@@ -15,6 +15,7 @@ builds:
     goos:
       - darwin
       - linux
+      - windows
     goarch:
       - amd64
       - arm64
@@ -24,10 +25,17 @@ builds:
 archives:
   - id: default
     # Predictable, version-less names so the curl installer can always fetch
-    # `…/releases/latest/download/lazyhttp_<os>_<arch>.tar.gz`.
+    # `…/releases/latest/download/lazyhttp_<os>_<arch>.tar.gz` (and Scoop / a
+    # manual download can fetch `lazyhttp_windows_<arch>.zip`).
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     formats:
       - tar.gz
+    # Windows ships a .zip instead — the native archive format there, and what
+    # Scoop expects. The binary inside is lazyhttp.exe (GoReleaser appends .exe).
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
 
 checksum:
   name_template: "checksums.txt"
@@ -58,3 +66,16 @@ homebrew_casks:
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/lazyhttp"]
           end
+
+# Pushes a Scoop manifest to github.com/wingedsheep/scoop-bucket on each release,
+# so Windows users can `scoop bucket add wingedsheep https://github.com/wingedsheep/scoop-bucket`
+# then `scoop install lazyhttp`. Needs SCOOP_BUCKET_TOKEN (a PAT scoped to the
+# bucket repo) in the workflow env — the Windows analogue of the Homebrew tap.
+scoops:
+  - name: lazyhttp
+    homepage: "https://github.com/wingedsheep/lazyhttp"
+    description: "Terminal UI for running .http test plans step by step"
+    repository:
+      owner: wingedsheep
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"

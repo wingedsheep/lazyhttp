@@ -181,3 +181,41 @@ func TestParseScriptBodiesIgnored(t *testing.T) {
 		t.Errorf("pre-request script should be ignored: %+v", preReq)
 	}
 }
+
+// TestParseCRLF feeds a Windows-authored plan (\r\n line endings) and checks
+// that no trailing \r leaks onto URLs, header values, inline @defs, captured-var
+// names, or @assert right-hand sides — and that a blank "\r" line still ends the
+// header section instead of becoming part of the body.
+func TestParseCRLF(t *testing.T) {
+	src := "@host = https://api.test\r\n" +
+		"\r\n" +
+		"### Create\r\n" +
+		"# @capture postId = json.id\r\n" +
+		"# @assert status == 201\r\n" +
+		"POST {{host}}/items\r\n" +
+		"Content-Type: application/json\r\n" +
+		"\r\n" +
+		"{\"name\":\"x\"}\r\n"
+
+	steps := Parse(src, Vars{})
+	if len(steps) != 1 {
+		t.Fatalf("want 1 step, got %d", len(steps))
+	}
+	s := steps[0]
+
+	if s.URL != "{{host}}/items" {
+		t.Errorf("URL carries \\r: %q", s.URL)
+	}
+	if got := s.Headers["Content-Type"]; got != "application/json" {
+		t.Errorf("header value carries \\r: %q", got)
+	}
+	if s.Body != `{"name":"x"}` {
+		t.Errorf("body wrong (blank \\r line should end headers): %q", s.Body)
+	}
+	if len(s.Captures) != 1 || s.Captures[0].Name != "postId" || s.Captures[0].Expr != "json.id" {
+		t.Errorf("capture carries \\r: %+v", s.Captures)
+	}
+	if len(s.Asserts) != 1 || s.Asserts[0].Want != "201" {
+		t.Errorf("assert RHS carries \\r: %+v", s.Asserts)
+	}
+}

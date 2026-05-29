@@ -30,6 +30,19 @@ curl -fsSL https://raw.githubusercontent.com/wingedsheep/lazyhttp/main/install.s
 It installs to `/usr/local/bin` if writable, otherwise `~/.local/bin`. Set a
 custom location with `LAZYHTTP_INSTALL_DIR=/somewhere`.
 
+### Scoop (Windows — no Go needed)
+
+```powershell
+scoop bucket add wingedsheep https://github.com/wingedsheep/scoop-bucket
+scoop install lazyhttp
+```
+
+Or grab `lazyhttp_windows_<arch>.zip` from the
+[latest release](https://github.com/wingedsheep/lazyhttp/releases/latest), unzip
+it, and put `lazyhttp.exe` on your `PATH`. See the
+[Windows notes](docs/http-format.md#windows-notes) for the default `@shell`
+interpreter and CRLF handling.
+
 ### go install (any OS with Go 1.24+)
 
 ```sh

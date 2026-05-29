@@ -16,6 +16,17 @@ var (
 	varDef    = regexp.MustCompile(`^@([\w.-]+)\s*=\s*(.*)$`) // @host = https://...
 )
 
+// normalizeNewlines converts \r\n and lone \r line endings to \n so the rest of
+// the parser, which is line-oriented on "\n", never sees a trailing carriage
+// return on a value.
+func normalizeNewlines(s string) string {
+	if !strings.ContainsRune(s, '\r') {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
+}
+
 // ParseFile reads a .http file from disk and parses it. The supplied vars (from
 // an environment file) are extended in place with any inline @definitions found.
 func ParseFile(path string, vars Vars) ([]step.Step, error) {
@@ -34,6 +45,11 @@ func Parse(src string, vars Vars) []step.Step {
 	if vars == nil {
 		vars = Vars{}
 	}
+	// Normalize Windows (\r\n) and classic-Mac (\r) line endings up front so a
+	// stray \r can't ride along on a URL, header value, directive arg, or
+	// captured-var name in a plan authored on Windows. Every split below is on
+	// "\n", so this single pass covers the whole line-oriented parser.
+	src = normalizeNewlines(src)
 	// First pass: collect inline variable definitions so they're available no
 	// matter where in the file a step references them.
 	for _, line := range strings.Split(src, "\n") {
