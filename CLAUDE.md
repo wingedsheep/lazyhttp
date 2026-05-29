@@ -14,7 +14,8 @@ is `lazy-http` but the binary and module are `lazyhttp`).
 
 ```sh
 go build -o bin/lazyhttp .       # build (output is gitignored)
-./bin/lazyhttp example.http      # run against the bundled example plan
+./bin/lazyhttp example.http      # open the TUI against the bundled example plan
+./bin/lazyhttp run example.http  # run headlessly (CI); exit 0 pass / 1 fail / 2 usage
 go test ./...                    # all tests
 go test ./internal/httpfile/     # one package
 go test ./internal/ui/ -run TestLayout   # one test by name
@@ -55,9 +56,14 @@ The data flows in one direction: **parse → expand → execute → evaluate →
   `Expand` (resolve `{{vars}}`, dynamic vars, inline response refs, and `< file` bodies),
   `Evaluate` (run `@capture` into `Vars` and `@assert` against the result),
   `ResolveResponseRef`/`LastResult`, `Reset` (`@reset` semantics), and `AuthResolver`.
-  `RunAll(ctx)` executes the whole plan top-to-bottom (capture→assert→reset, stop on the
-  first non-OK step) for headless use. `internal/ui` constructs a `Plan` and delegates, so
-  capture/assert/reset semantics live in exactly one place.
+  `Run(ctx, include)` executes the plan top-to-bottom (capture→assert→reset, stop on the
+  first non-OK step), running only the steps `include(i)` selects — `RunAll(ctx)` is the
+  `include == nil` (run-everything) case. The headless `lazyhttp run` subcommand (`run.go`
+  in package `main`) drives this and maps the outcome to a CI exit code; `--filter` builds
+  the `include` predicate. `run.go` builds a UI-independent `runReport`, which `report.go`
+  renders as `pretty` (TTY-coloured via `go-isatty`), `json`, or `junit` (`--output`/`-o`,
+  `--quiet`). `internal/ui` constructs a `Plan` and delegates too, so capture/assert/reset
+  semantics live in exactly one place.
 
 - **`internal/capture`** — evaluates capture/assert expressions against a `Result`:
   `status`, `body`, `header.Name`, or a JSON path (`json.a.b[0].c`, `$.a`, or bare `a.b`).

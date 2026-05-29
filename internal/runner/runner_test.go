@@ -307,3 +307,38 @@ func TestRunAllReset(t *testing.T) {
 		t.Error("the reset step should keep its own result")
 	}
 }
+
+// TestRunFiltered verifies Run with an include predicate executes only the
+// selected steps, leaving the rest Pending, while still threading captures
+// through the steps that do run.
+func TestRunFiltered(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &Plan{
+		Vars: httpfile.Vars{"host": srv.URL},
+		Steps: []step.Step{
+			{Name: "alpha", Kind: step.KindHTTP, Method: "GET", URL: "{{host}}/a"},
+			{Name: "beta", Kind: step.KindHTTP, Method: "GET", URL: "{{host}}/b"},
+			{Name: "gamma", Kind: step.KindHTTP, Method: "GET", URL: "{{host}}/c"},
+		},
+		Results: make([]step.Result, 3),
+	}
+
+	// Run only the steps named with an even index (alpha, gamma).
+	include := func(i int) bool { return i%2 == 0 }
+	if _, err := p.Run(context.Background(), include); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if p.Results[0].Status != step.Done {
+		t.Error("step 0 was selected and should have run")
+	}
+	if p.Results[1].Status != step.Pending {
+		t.Error("step 1 was excluded by the filter and should stay Pending")
+	}
+	if p.Results[2].Status != step.Done {
+		t.Error("step 2 was selected and should have run")
+	}
+}

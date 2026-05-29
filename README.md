@@ -68,6 +68,36 @@ lazyhttp --env dev example.http        # pick an environment from http-client.en
 lazyhttp --theme dracula example.http  # set a colour theme (cycle in-app with `t`)
 ```
 
+### Headless / CI
+
+`lazyhttp run <plan.http>` executes a plan top-to-bottom without the TUI, prints a
+per-step summary, and returns a CI-friendly exit code — `0` when every step and
+assertion passed, `1` on any failure (transport error, non-2xx status, or a failed
+`@assert`), `2` for usage/parse errors. A failed assertion against an otherwise
+successful request still exits non-zero, which is the behaviour pipelines depend on.
+
+```sh
+lazyhttp run example.http                   # run the whole plan, exit 0/1
+lazyhttp run --env dev example.http          # pick an environment
+lazyhttp run --filter "Log in" example.http  # run only matching steps (method/name/group)
+lazyhttp run --quiet example.http            # print only the final tally
+lazyhttp run -o json example.http            # machine-readable report on stdout
+lazyhttp run -o junit example.http > report.xml   # JUnit XML for CI test reporting
+```
+
+The chain stops at the first failing step, mirroring "run from here" in the TUI.
+`--output` (alias `-o`) is `pretty` (default, coloured on a TTY), `json`, or `junit`;
+the report goes to stdout and diagnostics to stderr, so redirection stays clean.
+
+A GitHub Actions step:
+
+```yaml
+- run: lazyhttp run --env ci api/smoke.http -o junit > report.xml
+- uses: dorny/test-reporter@v1
+  if: always()
+  with: { name: API smoke, path: report.xml, reporter: java-junit }
+```
+
 ### Environments
 
 If a `http-client.env.json` sits next to your `.http` file, `--env NAME` selects

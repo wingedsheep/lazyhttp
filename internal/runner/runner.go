@@ -77,9 +77,21 @@ func Load(path, envName string) (*Plan, error) {
 // between steps so a caller can cancel a long plan. The returned slice is the
 // Plan's Results; err is non-nil only for ctx cancellation.
 func (p *Plan) RunAll(ctx context.Context) ([]step.Result, error) {
+	return p.Run(ctx, nil)
+}
+
+// Run is RunAll restricted to the steps for which include(i) is true; pass nil
+// to run every step (what RunAll does). A skipped step keeps its Pending result
+// and takes no part in capture, @reset, or the stop-on-first-failure chain — so
+// a headless `--filter` runs only the matching steps while everything else
+// (expansion ordering, capture→assert→reset, stop semantics) is identical.
+func (p *Plan) Run(ctx context.Context, include func(i int) bool) ([]step.Result, error) {
 	for i := range p.Steps {
 		if err := ctx.Err(); err != nil {
 			return p.Results, err
+		}
+		if include != nil && !include(i) {
+			continue
 		}
 		s, err := p.Expand(p.Steps[i])
 		if err != nil {
@@ -97,6 +109,18 @@ func (p *Plan) RunAll(ctx context.Context) ([]step.Result, error) {
 		}
 	}
 	return p.Results, nil
+}
+
+// Label returns step i's display name with {{vars}} expanded — the same name the
+// TUI list shows, without the leading reset glyph. Shell steps keep their raw
+// name (there's no URL to template). Used for headless reporting and --filter
+// matching.
+func (p *Plan) Label(i int) string {
+	s := p.Steps[i]
+	if s.Kind == step.KindShell {
+		return s.Name
+	}
+	return p.Vars.Expand(s.Name)
 }
 
 // Expand returns a copy of s with its URL, headers and body resolved against the

@@ -14,10 +14,17 @@ import (
 )
 
 func main() {
+	// `lazyhttp run <plan.http>` executes a plan headlessly with a CI-friendly
+	// exit code; bare `lazyhttp <plan.http>` keeps launching the TUI.
+	if len(os.Args) > 1 && os.Args[1] == "run" {
+		os.Exit(runCommand(os.Args[2:], os.Stdout, os.Stderr))
+	}
+
 	env := flag.String("env", "", "environment name from http-client.env.json")
 	theme := flag.String("theme", "", "colour theme: "+strings.Join(ui.ThemeNames(), ", ")+" (cycle with `t`)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: lazyhttp [--env NAME] [--theme NAME] <plan.http>\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: lazyhttp [--env NAME] [--theme NAME] <plan.http>   (open the TUI)\n")
+		fmt.Fprintf(os.Stderr, "       lazyhttp run [--env NAME] [--filter SUBSTR] <plan.http>   (headless, for CI)\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()

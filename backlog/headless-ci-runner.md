@@ -83,9 +83,18 @@ de-risks the UI (pure logic becomes unit-testable without a Bubble Tea harness).
 
 ---
 
-## Phase 2 — The `run` subcommand + exit codes
+## Phase 2 — The `run` subcommand + exit codes — ✅ shipped
 
 **Value:** high. **Effort:** small once Phase 1 lands.
+
+Landed in `run.go` (package `main`): `lazyhttp run [--env NAME] [--filter SUBSTR]
+<plan.http>` drives `runner.Plan.Run(ctx, include)` and prints a per-step summary
+(`✓/✗ METHOD name → status · duration` with a line per assertion) and a final
+`N passed, M failed` total. Exit codes are 0 (all pass) / 1 (transport error, non-2xx,
+or failed assertion) / 2 (usage/parse). `--filter` reuses the TUI's match haystack
+(method + display name + group) via the new `Plan.Run` include predicate and
+`Plan.Label`. Phase 3 (`--output json`/`junit`, `--quiet`, colour) is still open. The
+rest of this section is kept for reference.
 
 ### Changes
 
@@ -114,9 +123,20 @@ de-risks the UI (pure logic becomes unit-testable without a Bubble Tea harness).
 
 ---
 
-## Phase 3 — CI-friendly output formats
+## Phase 3 — CI-friendly output formats — ✅ shipped
 
 **Value:** high for adoption. **Effort:** small–medium.
+
+Landed in `report.go` (package `main`): `runCommand` builds a UI-independent
+`runReport` (per-step method/URL/status/duration, captures, assertion outcomes,
+overall pass/fail) and `--output`/`-o` selects the renderer — `pretty` (default;
+ANSI-coloured only on a TTY with `NO_COLOR` honoured, detected via `go-isatty`),
+`json` (indented, `encoding/json`), or `junit` (one `<testcase>` per step, failures
+carrying a `<failure>` summary). `--quiet` drops the per-step lines from `pretty`.
+Reports go to stdout, diagnostics to stderr. Formatter tests render a fixed
+multi-step `runReport` and assert the JSON round-trips, the JUnit XML parses with
+the right failure, and pretty emits/omits ANSI per the color flag. The rest of this
+section is kept for reference.
 
 ### Changes
 
