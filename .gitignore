@@ -5,6 +5,9 @@
 *.test
 *.out
 
+# GoReleaser build output
+/dist/
+
 # Editor / OS
 .DS_Store
 .idea/

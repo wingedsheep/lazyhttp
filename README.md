@@ -7,24 +7,38 @@ and assert on responses.
 
 ## Install
 
-You need [Go](https://go.dev/dl/) 1.24+ on the machine. Then, one command:
+Pick whichever fits the machine — all three give you a `lazyhttp` on your `PATH`.
+
+### Homebrew (macOS / Linux — no Go needed)
+
+```sh
+brew install wingedsheep/tap/lazyhttp
+```
+
+Upgrade later with `brew upgrade lazyhttp`.
+
+### curl one-liner (macOS / Linux — no Go, no Homebrew)
+
+Downloads the latest prebuilt binary from GitHub Releases:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/wingedsheep/lazyhttp/main/install.sh | sh
+```
+
+It installs to `/usr/local/bin` if writable, otherwise `~/.local/bin`. Set a
+custom location with `LAZYHTTP_INSTALL_DIR=/somewhere`.
+
+### go install (any OS with Go 1.24+)
 
 ```sh
 go install github.com/wingedsheep/lazyhttp@latest
 ```
 
-This builds the latest release and drops a `lazyhttp` binary in your Go bin
-directory. Make sure that directory is on your `PATH`:
+This drops `lazyhttp` in your Go bin dir — make sure it's on your `PATH`:
 
 ```sh
 # Add to ~/.zshrc (or ~/.bashrc) if `lazyhttp` isn't found after install:
 export PATH="$PATH:$(go env GOPATH)/bin"
-```
-
-Then open a new terminal (or `source` your shell rc) and you're set:
-
-```sh
-lazyhttp --help
 ```
 
 > **Don't have Go?** On macOS: `brew install go`. Or with mise: `mise use -g go@1.24`.
@@ -71,11 +85,9 @@ a named environment and its values fill in `{{vars}}`:
 
 ## Updating
 
-Re-run the install command to pull the newest version:
-
-```sh
-go install github.com/wingedsheep/lazyhttp@latest
-```
+- Homebrew: `brew upgrade lazyhttp`
+- curl: re-run the install one-liner
+- Go: `go install github.com/wingedsheep/lazyhttp@latest`
 
 ## Building from source
 

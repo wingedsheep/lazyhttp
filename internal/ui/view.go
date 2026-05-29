@@ -35,9 +35,12 @@ func (m *Model) layout() {
 	m.listW, m.resultW, m.contentH = listW, resultW, contentH
 
 	// The viewport occupies the result pane's content area (inside the 1-col
-	// padding on each side) minus its one header row.
+	// padding on each side) minus the header, which is two rows: the label plus
+	// the underline drawn by paneHeader's bottom border. Counting it as one row
+	// made the result pane a line taller than the list, pushing the whole View
+	// past the terminal height so the status bar scrolled off the top.
 	m.viewport.Width = max(resultW-2, 1)
-	m.viewport.Height = contentH - 1
+	m.viewport.Height = max(contentH-2, 1)
 }
 
 // refreshResult renders the selected step's request/response into the viewport.
@@ -227,8 +230,7 @@ func (m Model) barFilter() string {
 // tree connector so the section nesting reads at a glance.
 func (m Model) renderList() string {
 	innerW := max(m.listW-2, 8) // pane content width, inside its padding
-	var b strings.Builder
-	b.WriteString(m.styles.paneHeader.Width(innerW).Render("STEPS") + "\n")
+	header := m.styles.paneHeader.Width(innerW).Render("STEPS")
 
 	vis := m.visible()
 	if len(vis) == 0 {
@@ -236,16 +238,19 @@ func (m Model) renderList() string {
 		if m.filter != "" {
 			msg = "No steps match “" + m.filter + "”."
 		}
-		b.WriteString(m.styles.dim.Render(truncate(msg, innerW)))
-		return b.String()
+		return header + "\n" + m.styles.dim.Render(truncate(msg, innerW))
 	}
 
+	// Render the body as individual lines (group headings plus step rows),
+	// remembering the line index of the selected row.
+	var lines []string
+	cursorLine := 0
 	group := ""
 	for p, i := range vis {
 		if g := m.steps[i].Group; g != group {
 			group = g
 			if group != "" {
-				b.WriteString(m.styles.group.Render("▌ "+truncate(group, innerW-2)) + "\n")
+				lines = append(lines, m.styles.group.Render("▌ "+truncate(group, innerW-2)))
 			}
 		}
 		// Tree connector: the last visible step of a group elbows, the rest tee.
@@ -257,9 +262,22 @@ func (m Model) renderList() string {
 				conn = "├"
 			}
 		}
-		b.WriteString(m.renderRow(i, conn, innerW) + "\n")
+		if i == m.cursor {
+			cursorLine = len(lines)
+		}
+		lines = append(lines, m.renderRow(i, conn, innerW))
 	}
-	return b.String()
+
+	// Scroll a window of the body that keeps the cursor in view and never spills
+	// past the pane's content area (two rows go to the STEPS header). Without
+	// this a long plan grows the pane taller than the terminal, scrolling the
+	// status bar off the top of the alt-screen.
+	if budget := max(m.contentH-2, 1); len(lines) > budget {
+		start := clamp(cursorLine-budget/2, 0, len(lines)-budget)
+		lines = lines[start : start+budget]
+	}
+
+	return header + "\n" + strings.Join(lines, "\n")
 }
 
 // renderRow lays out a single step row to exactly innerW columns: an optional

@@ -38,6 +38,29 @@ func TestLayoutFitsWidth(t *testing.T) {
 	}
 }
 
+// TestLayoutFitsHeight renders the UI at several terminal sizes and asserts the
+// View is never taller than the terminal. In the alt-screen an over-tall frame
+// scrolls the top line off — which silently hid the status bar (file/env/filter/
+// theme). The result pane's two-row header was the off-by-one culprit.
+func TestLayoutFitsHeight(t *testing.T) {
+	for _, h := range []int{10, 16, 24, 30, 50} {
+		m := New(filepath.Join("..", "..", "example.http"), "dev")
+		var model tea.Model = m
+		model, _ = model.Update(tea.WindowSizeMsg{Width: 120, Height: h})
+		model, _ = model.Update(exec.ResultMsg{Index: 0, Result: step.Result{
+			Status: step.Done, StatusCode: 200, Body: `{"id":42,"ok":true,"name":"Ada"}`,
+		}})
+
+		if got := strings.Count(model.View(), "\n") + 1; got > h {
+			t.Errorf("height %d: View is %d lines, exceeds terminal (status bar scrolls off)", h, got)
+		}
+		// The status bar must survive in the rendered frame.
+		if !strings.Contains(model.View(), "lazy-http") {
+			t.Errorf("height %d: status bar (lazy-http) missing from View", h)
+		}
+	}
+}
+
 // TestRunningRowWidth guards the spinner glyph column: a running step's row must
 // render to exactly the list's inner width, like every other row. spinner.Dot's
 // trailing-space frames are width 2 and once overflowed the fixed glyph cell,

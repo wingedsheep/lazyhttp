@@ -1,0 +1,60 @@
+version: 2
+
+project_name: lazyhttp
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: lazyhttp
+    binary: lazyhttp
+    main: .
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: default
+    # Predictable, version-less names so the curl installer can always fetch
+    # `…/releases/latest/download/lazyhttp_<os>_<arch>.tar.gz`.
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: wingedsheep
+    name: lazyhttp
+
+# Pushes a Homebrew cask to github.com/wingedsheep/homebrew-tap on each release,
+# so `brew install wingedsheep/tap/lazyhttp` works. Needs HOMEBREW_TAP_TOKEN
+# (a PAT scoped to the tap repo) in the workflow env.
+homebrew_casks:
+  - name: lazyhttp
+    binaries:
+      - lazyhttp
+    homepage: "https://github.com/wingedsheep/lazyhttp"
+    description: "Terminal UI for running .http test plans step by step"
+    repository:
+      owner: wingedsheep
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    # The released binary is unsigned; strip the quarantine flag on install so
+    # macOS Gatekeeper doesn't refuse to run it.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/lazyhttp"]
+          end
