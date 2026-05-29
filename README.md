@@ -5,6 +5,8 @@ for your HTTP requests. Open any `.http` file (the same format used by the Intel
 HTTP Client and the VS Code REST Client), step through requests, capture values,
 and assert on responses.
 
+![lazyhttp running the bundled example plan](.github/assets/screenshot.png)
+
 ## Install
 
 Pick whichever fits the machine — all three give you a `lazyhttp` on your `PATH`.
@@ -60,8 +62,8 @@ a named environment and its values fill in `{{vars}}`:
 
 ```json
 {
-  "dev":     { "api": "https://api.restful-api.dev", "token": "s3cr3t-demo-token" },
-  "staging": { "api": "https://api.restful-api.dev", "token": "s3cr3t-staging-token" }
+  "dev":     { "api": "https://dummyjson.com", "bin": "https://httpbin.org", "user": "emilys", "pass": "emilyspass" },
+  "staging": { "api": "https://dummyjson.com", "bin": "https://httpbin.org", "user": "emilys", "pass": "emilyspass" }
 }
 ```
 
@@ -82,6 +84,14 @@ a named environment and its values fill in `{{vars}}`:
 | `E`            | switch environment      |
 | `?`            | full help               |
 | `q` / `^c`     | quit                    |
+
+## Writing `.http` files
+
+The full `.http` syntax lazyhttp accepts — steps, the `# @name` / `# @group` /
+`# @capture` / `# @assert` / `# @shell` / `# @reset` directives, capture and
+assertion expressions, and `{{variable}}` resolution — is documented in
+**[docs/http-format.md](docs/http-format.md)**. See [`example.http`](example.http)
+for a complete, runnable tour.
 
 ## Updating
 
