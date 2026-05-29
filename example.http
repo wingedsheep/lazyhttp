@@ -128,6 +128,8 @@ DELETE {{api}}/products/{{id}}
 
 ### Echo a POST and assert on what the server received
 ### httpbin reflects the method, query args, headers and parsed JSON body back.
+### Dynamic variables ({{$uuid}}, {{$timestamp}}, {{$randomInt}}) are generated
+### fresh on send, so we assert they arrived rather than on an exact value.
 # @group Echo
 # @name Echo round-trip
 # @capture echoIp = json.origin
@@ -135,13 +137,18 @@ DELETE {{api}}/products/{{id}}
 # @assert json.method == POST
 # @assert json.args.team == lazy
 # @assert json.headers.X-Demo == lazyhttp
+# @assert json.headers.X-Request-Id exists
 # @assert json.json.ping == pong
+# @assert json.json.nonce exists
 POST {{bin}}/anything?team=lazy
 Content-Type: application/json
 X-Demo: lazyhttp
+X-Request-Id: {{$uuid}}
 
 {
-  "ping": "pong"
+  "ping": "pong",
+  "sentAt": {{$timestamp}},
+  "nonce": {{$randomInt 1000 9999}}
 }
 
 ### Print everything captured so far

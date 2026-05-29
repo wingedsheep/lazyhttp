@@ -91,6 +91,23 @@ Values come from three places, later ones overriding earlier:
    runs, so position doesn't matter. Example: `@product = lazyhttp widget`.
 3. **Captures** — values pulled from responses by `# @capture`.
 
+### Dynamic variables
+
+`{{$…}}` placeholders are generated fresh each time a step is sent — every
+occurrence resolves independently, so two `{{$uuid}}` in one request differ.
+
+| Placeholder | Resolves to |
+| --- | --- |
+| `{{$uuid}}` / `{{$guid}}` | A random RFC 4122 version-4 UUID. |
+| `{{$timestamp}}` | Current time as Unix seconds. |
+| `{{$isoTimestamp}}` | Current time as RFC 3339 (UTC). |
+| `{{$randomInt [min max]}}` | A random integer in `[min, max)`; defaults to `[0, 1000)`. |
+| `{{$datetime <fmt>}}` | Current UTC time formatted as `rfc1123` or `iso8601`. |
+| `{{$processEnv <VAR>}}` | The value of environment variable `VAR`. |
+
+An unrecognized dynamic name (e.g. `{{$dotenv}}`, not yet supported) is left
+literal, just like an unknown plain variable.
+
 ### Environment file
 
 A `http-client.env.json` sitting next to the plan maps environment names to
@@ -136,10 +153,10 @@ called out below.
 
 Each entry lists the upstream syntax and what lazyhttp does with it today.
 
-- **Dynamic variables** — `{{$uuid}}`, `{{$timestamp}}`, `{{$randomInt 0 9}}`,
-  `{{$datetime iso8601}}`, `{{$processEnv VAR}}`, `{{$dotenv VAR}}`.
-  Not expanded — the `{{var}}` matcher only accepts `[\w.-]`, so a leading `$`
-  doesn't match and the placeholder is sent literally.
+- **`{{$dotenv VAR}}`** — the one dynamic variable not yet wired up; it needs
+  `.env` file discovery. Left literal for now. (Other dynamic variables —
+  `{{$uuid}}`, `{{$timestamp}}`, `{{$randomInt}}`, `{{$datetime}}`,
+  `{{$processEnv}}` — are supported; see [Dynamic variables](#dynamic-variables).)
 - **Request body from a file** — `< ./body.json`.
   Silently dropped: `parseHTTP` ignores any body starting with `<`, so no body is sent.
 - **File body with variable expansion** — `<@ ./body.xml`, `<@latin1 ./file`.
@@ -174,8 +191,6 @@ Each entry lists the upstream syntax and what lazyhttp does with it today.
   lazyhttp sends an empty body with no warning. Inline the body instead.
 - **`Basic` auth isn't encoded.** Provide the already-base64-encoded credentials
   (`Authorization: Basic dXNlcjpwYXNz`) rather than the `user pass` shorthand.
-- **`{{$...}}` placeholders pass through.** Anything relying on a generated value
-  (UUIDs, timestamps) will send the literal `{{$uuid}}` text.
 
 If you hit one of these and want it supported, it's worth opening an issue — several
 (dynamic variables, `< file` bodies, per-request directives) are good candidates.

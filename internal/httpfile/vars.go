@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 )
 
-// varPattern matches IntelliJ-style placeholders such as {{host}}.
-var varPattern = regexp.MustCompile(`\{\{\s*([\w.-]+)\s*\}\}`)
+// varPattern matches IntelliJ-style placeholders such as {{host}} and dynamic
+// variables with optional args such as {{$uuid}} or {{$randomInt 0 9}}.
+var varPattern = regexp.MustCompile(`\{\{\s*(\$?[\w.-]+(?:\s+[^}]+)?)\s*\}\}`)
 
 // Vars holds the resolved variable set for a plan: values defined inline in the
 // .http file (@name = value) layered over values from an environment file.
@@ -72,8 +74,17 @@ func LoadEnvNames(planPath string) ([]string, error) {
 // are left untouched so the user can see what failed to resolve.
 func (v Vars) Expand(s string) string {
 	return varPattern.ReplaceAllStringFunc(s, func(match string) string {
-		name := varPattern.FindStringSubmatch(match)[1]
-		if val, ok := v[name]; ok {
+		token := strings.TrimSpace(varPattern.FindStringSubmatch(match)[1])
+		// Dynamic variables ({{$uuid}}, {{$randomInt 0 9}}) resolve before the
+		// user map, splitting the token into a name and space-separated args.
+		if strings.HasPrefix(token, "$") {
+			fields := strings.Fields(token)
+			if val, ok := dynamic(fields[0], fields[1:]); ok {
+				return val
+			}
+			return match
+		}
+		if val, ok := v[token]; ok {
 			return val
 		}
 		return match

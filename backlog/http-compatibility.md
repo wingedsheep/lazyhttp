@@ -31,9 +31,13 @@ Two structural facts shape everything below:
 
 ---
 
-## Phase 1 — Dynamic variables (`{{$uuid}}`, `{{$timestamp}}`, …)
+## Phase 1 — Dynamic variables (`{{$uuid}}`, `{{$timestamp}}`, …) — ✅ shipped in 0.3.0
 
 **Value:** high — extremely common in real plans. **Effort:** small, self-contained.
+
+Landed in `internal/httpfile/dynamic.go` with the widened `varPattern` in
+`vars.go`. `$dotenv` is intentionally still deferred to Phase 4 (needs `.env`
+discovery). The rest of this section is kept for reference.
 
 ### Changes
 
