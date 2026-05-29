@@ -53,12 +53,15 @@ type Capture struct {
 }
 
 // Assertion checks a value from the response. Expr is evaluated the same way as
-// a Capture; Op compares it against Want. Op "exists" ignores Want.
+// a Capture; Op compares it against Want. Op "exists" ignores Want. Negated is
+// set by a "not" prefix (`status not in 200,204`) and inverts the operator's
+// verdict — it composes with every operator, not just one.
 type Assertion struct {
-	Expr string // left-hand expression, e.g. "status", "json.id"
-	Op   string // ==, !=, contains, exists
-	Want string // expected value (empty for "exists")
-	Raw  string // original directive text, for display
+	Expr    string // left-hand expression, e.g. "status", "json.id"
+	Op      string // ==, !=, contains, in, >, >=, <, <=, matches, exists
+	Negated bool   // true when the directive used a "not" prefix
+	Want    string // expected value (empty for "exists")
+	Raw     string // original directive text, for display
 }
 
 // AssertOutcome is the result of evaluating one Assertion against a response.
@@ -66,6 +69,8 @@ type AssertOutcome struct {
 	Assertion Assertion
 	Pass      bool
 	Got       string // the value the expression resolved to
+	Detail    string // why it failed, when "got" alone doesn't explain it
+	// (e.g. a non-numeric comparand or an invalid regexp)
 }
 
 // Status tracks where a step is in its lifecycle.

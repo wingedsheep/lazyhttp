@@ -12,8 +12,8 @@
 #   httpbin.org     reflects the request as JSON, so we can assert on the method,
 #                   query string, headers and body the server actually saw.
 #
-# Tip: {{vars}} are expanded in URLs, headers and bodies — but the right-hand side
-# of an @assert is compared literally, so don't wrap assertion values in {{...}}.
+# Tip: {{vars}} are expanded in URLs, headers, bodies and the right-hand side of
+# an @assert — so you can assert one response against a value captured earlier.
 #
 # Hosts and credentials come from http-client.env.json, so pick an environment:
 #   lazyhttp --env dev example.http
@@ -94,9 +94,10 @@ Accept: application/json
 # @name Create product
 # @capture newId = json.id
 # @capture createdTitle = json.title
-# @assert status == 201
+# @assert status in 200,201
 # @assert json.title == lazyhttp widget
 # @assert json.id exists
+# @assert json.price > 0
 POST {{api}}/products/add
 Content-Type: application/json
 
@@ -132,7 +133,7 @@ Content-Type: application/json
 
 ### Delete it
 # @name Delete product
-# @assert status == 200
+# @assert status in 200,204
 # @assert json.isDeleted == true
 # @assert json.deletedOn exists
 DELETE {{api}}/products/{{id}}
@@ -148,7 +149,7 @@ DELETE {{api}}/products/{{id}}
 # @assert json.method == POST
 # @assert json.args.team == lazy
 # @assert json.headers.X-Demo == lazyhttp
-# @assert json.headers.X-Correlation-Id exists
+# @assert json.headers.X-Correlation-Id matches ^[0-9a-f-]{36}$
 # @assert json.json.ping == pong
 # @assert json.json.nonce exists
 POST {{bin}}/anything?team=lazy

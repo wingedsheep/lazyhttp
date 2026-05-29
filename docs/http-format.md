@@ -44,7 +44,7 @@ All directives are `#` comments. They are case-sensitive and use a **single** `#
 | `# @name <text>` | Display name for the step (overrides the `###` name). |
 | `# @group <text>` | Section heading. Propagates forward to later steps until the next `@group`. |
 | `# @capture <var> = <expr>` | Extract a value from the response into `{{var}}` for later steps. |
-| `# @assert <expr> <op> [<want>]` | Check a value from the response; the step fails if any assertion fails. |
+| `# @assert <expr> [not] <op> [<want>]` | Check a value from the response; the step fails if any assertion fails. |
 | `# @shell` | Treat the step body as a shell script instead of an HTTP request. |
 | `# @reset` | When this step succeeds, clear every other step's result and drop captured variables — a clean-slate anchor to "run from here". |
 | `# @import <path>` | Splice another `.http` file's steps in at this point. See [Composing plans with `@import`](#composing-plans-with-import). |
@@ -74,17 +74,51 @@ doesn't resolve counts as "not found" (fails an `exists`/`==` assertion).
 | `# @assert <expr> == <want>` | the value equals `<want>` exactly. |
 | `# @assert <expr> != <want>` | the value differs from `<want>`. |
 | `# @assert <expr> contains <want>` | the value contains `<want>` as a substring. |
+| `# @assert <expr> in <a,b,c>` | the value is one of the comma-separated set (whitespace around commas is ignored). |
+| `# @assert <expr> > <n>` (also `>=`, `<`, `<=`) | both sides parse as numbers and the comparison holds. |
+| `# @assert <expr> matches <regex>` | the value matches the regular expression. |
 
-The right-hand `<want>` is compared **literally** — don't wrap it in `{{…}}`.
-Surrounding single or double quotes are tolerated and stripped, so
+Prefix any operator with **`not`** to negate it — `not contains`, `not in`,
+`not matches`, even `not exists`:
+
+```
+# @assert status in 200,204            # a DELETE that may 200 or 204
+# @assert json.count > 0               # at least one result
+# @assert header.Location matches ^/orders/\d+$
+# @assert body not contains error      # negated substring
+```
+
+Notes:
+
+- **`in`** compares as strings, so `status in 200,204` is the idiomatic "one of
+  several acceptable status codes".
+- **Numeric operators** parse *both* sides as numbers; if either side isn't
+  numeric the assertion **fails** (it doesn't error) and the result pane shows
+  why, e.g. `left is not numeric: "abc"`.
+- **`matches`** uses Go's [RE2](https://github.com/google/re2/wiki/Syntax) regex
+  syntax. The match is partial unless you anchor it (`^…$`); anchoring is up to
+  you. The pattern is taken verbatim — quotes are *not* stripped.
+
+The right-hand `<want>` expands `{{…}}` like anywhere else, so you can assert one
+response against a value captured earlier — including a `# @capture` from the
+same step, since captures run before assertions:
+
+```
+# @capture newId = json.id
+# @assert json.id == {{newId}}          # compare against a captured value
+```
+
+An unknown variable stays literal (`{{missing}}`), so the comparison fails
+visibly rather than matching something unexpected. For `==`, `!=`, `contains`,
+and `in`, surrounding single or double quotes are tolerated and stripped, so
 `@assert status == "201"` and `@assert status == 201` are equivalent.
 
 ## Variables
 
-Use `{{name}}` anywhere in a URL, header, or body. Placeholders are expanded at
-**execution time**, so a value `@capture`d from one step flows into the steps
-below it. An unknown variable is left as-is (e.g. `{{missing}}`) so you can see
-what failed to resolve.
+Use `{{name}}` anywhere in a URL, header, body, or the right-hand side of an
+`@assert`. Placeholders are expanded at **execution time**, so a value
+`@capture`d from one step flows into the steps below it. An unknown variable is
+left as-is (e.g. `{{missing}}`) so you can see what failed to resolve.
 
 Variables can be **composed** from other variables: if a value contains a
 `{{…}}` reference, that reference is resolved too, and so on. So `host =

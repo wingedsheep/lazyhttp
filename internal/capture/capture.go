@@ -4,7 +4,9 @@ package capture
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -43,23 +45,91 @@ func Eval(expr string, r step.Result) (value string, ok bool) {
 }
 
 // Check evaluates an assertion against a result. The left-hand expression is
-// resolved like a capture, then compared per the operator.
+// resolved like a capture, then compared per the operator. A "not" prefix
+// (a.Negated) inverts the operator's verdict — except for an unknown operator,
+// which never passes regardless of negation.
 func Check(a step.Assertion, r step.Result) step.AssertOutcome {
 	got, found := Eval(a.Expr, r)
 	out := step.AssertOutcome{Assertion: a, Got: got}
-	switch a.Op {
-	case "exists":
-		out.Pass = found
-	case "==":
-		out.Pass = found && got == a.Want
-	case "!=":
-		out.Pass = found && got != a.Want
-	case "contains":
-		out.Pass = found && strings.Contains(got, a.Want)
-	default:
-		out.Pass = false // unknown operator never passes
+	pass, detail, known := evalOp(a.Op, a.Want, got, found)
+	if !known {
+		out.Detail = detail // Pass stays false; negating an unknown op is still false
+		return out
 	}
+	out.Pass = pass != a.Negated
+	out.Detail = detail
 	return out
+}
+
+// evalOp applies one assertion operator, returning its verdict before any
+// negation, an optional failure detail (for cases where the resolved value
+// alone doesn't explain the failure), and whether the operator is recognized.
+func evalOp(op, want, got string, found bool) (pass bool, detail string, known bool) {
+	switch op {
+	case "exists":
+		return found, "", true
+	case "==":
+		return found && got == unquote(want), "", true
+	case "!=":
+		return found && got != unquote(want), "", true
+	case "contains":
+		return found && strings.Contains(got, unquote(want)), "", true
+	case "in":
+		if !found {
+			return false, "", true
+		}
+		for _, w := range strings.Split(want, ",") {
+			if got == unquote(strings.TrimSpace(w)) {
+				return true, "", true
+			}
+		}
+		return false, "", true
+	case ">", ">=", "<", "<=":
+		if !found {
+			return false, "", true
+		}
+		l, err := strconv.ParseFloat(strings.TrimSpace(got), 64)
+		if err != nil {
+			return false, fmt.Sprintf("left is not numeric: %q", got), true
+		}
+		rhs, err := strconv.ParseFloat(unquote(strings.TrimSpace(want)), 64)
+		if err != nil {
+			return false, fmt.Sprintf("right is not numeric: %q", want), true
+		}
+		return numericCompare(op, l, rhs), "", true
+	case "matches":
+		if !found {
+			return false, "", true
+		}
+		re, err := regexp.Compile(want) // RE2 syntax; anchors are the author's job
+		if err != nil {
+			return false, fmt.Sprintf("invalid regexp: %v", err), true
+		}
+		return re.MatchString(got), "", true
+	default:
+		return false, "unknown operator: " + op, false
+	}
+}
+
+func numericCompare(op string, l, r float64) bool {
+	switch op {
+	case ">":
+		return l > r
+	case ">=":
+		return l >= r
+	case "<":
+		return l < r
+	case "<=":
+		return l <= r
+	}
+	return false
+}
+
+// unquote strips a single layer of surrounding single or double quotes, so
+// `== "201"` and `== 201` are equivalent. Operators that compare structurally
+// (matches) skip it on purpose.
+func unquote(s string) string {
+	return strings.Trim(s, `"'`)
 }
 
 // jsonPath walks a dotted/bracketed path into a JSON document.

@@ -264,16 +264,28 @@ func parseBodyRef(line string) (path string, expand bool, ok bool) {
 	return fields[0], expand, true
 }
 
-// parseAssertion reads "<expr> <op> <want>" or "<expr> exists" from a directive.
+// parseAssertion reads "<expr> [not] <op> [<want>]" from a directive — e.g.
+// "status exists", "status not in 200,204", "json.count > 0". The "not" prefix
+// negates whichever operator follows. Want is kept raw (quote tolerance and
+// comma-splitting are the operator's job in capture.Check), so a regex or value
+// list survives intact.
 func parseAssertion(rest string) (step.Assertion, bool) {
 	fields := strings.Fields(rest)
 	if len(fields) < 2 {
 		return step.Assertion{}, false
 	}
-	a := step.Assertion{Expr: fields[0], Op: fields[1], Raw: rest}
-	if a.Op != "exists" {
-		want := strings.TrimSpace(strings.Join(fields[2:], " "))
-		a.Want = strings.Trim(want, `"'`) // tolerate quoted values
+	a := step.Assertion{Expr: fields[0], Raw: rest}
+	tail := fields[1:]
+	if tail[0] == "not" {
+		a.Negated = true
+		tail = tail[1:]
+		if len(tail) == 0 {
+			return step.Assertion{}, false // "expr not" with no operator
+		}
+	}
+	a.Op = tail[0]
+	if len(tail) > 1 {
+		a.Want = strings.Join(tail[1:], " ")
 	}
 	return a, true
 }

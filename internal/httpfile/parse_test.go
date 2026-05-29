@@ -114,14 +114,17 @@ func TestParseAssertions(t *testing.T) {
 # @assert status == 201
 # @assert header.Content-Type contains json
 # @assert json.id exists
+# @assert status in 200, 204
+# @assert body not contains error
+# @assert header.Location matches ^/orders/\d+$
 POST /posts
 `
 	steps := Parse(src, Vars{})
 	a := steps[0].Asserts
-	if len(a) != 3 {
-		t.Fatalf("want 3 assertions, got %d", len(a))
+	if len(a) != 6 {
+		t.Fatalf("want 6 assertions, got %d", len(a))
 	}
-	if a[0].Expr != "status" || a[0].Op != "==" || a[0].Want != "201" {
+	if a[0].Expr != "status" || a[0].Op != "==" || a[0].Want != "201" || a[0].Negated {
 		t.Errorf("assert 0 wrong: %+v", a[0])
 	}
 	if a[1].Op != "contains" || a[1].Want != "json" {
@@ -129,6 +132,18 @@ POST /posts
 	}
 	if a[2].Op != "exists" || a[2].Want != "" {
 		t.Errorf("assert 2 wrong: %+v", a[2])
+	}
+	// `in` keeps its list (and inner spaces) raw — splitting is capture.Check's job.
+	if a[3].Op != "in" || a[3].Want != "200, 204" || a[3].Negated {
+		t.Errorf("assert 3 wrong: %+v", a[3])
+	}
+	// a `not` prefix sets Negated and the operator is the token after it.
+	if a[4].Expr != "body" || a[4].Op != "contains" || a[4].Want != "error" || !a[4].Negated {
+		t.Errorf("assert 4 wrong: %+v", a[4])
+	}
+	// a regex want is preserved verbatim — no quote-stripping, no escaping.
+	if a[5].Op != "matches" || a[5].Want != `^/orders/\d+$` {
+		t.Errorf("assert 5 wrong: %+v", a[5])
 	}
 }
 

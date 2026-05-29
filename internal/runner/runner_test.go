@@ -79,6 +79,44 @@ func TestCaptureFlowsIntoLaterStep(t *testing.T) {
 	}
 }
 
+// TestAssertWantExpandsVars verifies the right-hand side of an assertion expands
+// {{vars}} — including a value captured earlier in the same step — so one
+// response can be asserted against another captured value.
+func TestAssertWantExpandsVars(t *testing.T) {
+	p := &Plan{
+		Vars: httpfile.Vars{"expectedId": "42"},
+		Steps: []step.Step{
+			{
+				Kind: step.KindHTTP,
+				// title is captured first, then asserted against in the same step.
+				Captures: []step.Capture{{Name: "savedTitle", Expr: "json.title"}},
+				Asserts: []step.Assertion{
+					{Expr: "json.id", Op: "==", Want: "{{expectedId}}", Raw: "json.id == {{expectedId}}"},
+					{Expr: "json.title", Op: "==", Want: "{{savedTitle}}", Raw: "json.title == {{savedTitle}}"},
+					{Expr: "json.id", Op: "==", Want: "{{missing}}", Raw: "json.id == {{missing}}"},
+				},
+			},
+		},
+		Results: make([]step.Result, 1),
+	}
+
+	r := p.Evaluate(0, step.Result{Status: step.Done, StatusCode: 200, Body: `{"id": 42, "title": "hi"}`})
+	if !r.Asserts[0].Pass {
+		t.Errorf("{{expectedId}} should expand to 42 and match (got %q)", r.Asserts[0].Got)
+	}
+	if !r.Asserts[1].Pass {
+		t.Errorf("same-step capture {{savedTitle}} should expand and match (got %q)", r.Asserts[1].Got)
+	}
+	// An unknown var stays literal (documented behavior), so the compare fails
+	// visibly rather than matching anything — and Raw keeps the template for display.
+	if r.Asserts[2].Pass {
+		t.Errorf("unknown {{missing}} should not match")
+	}
+	if r.Asserts[0].Assertion.Raw != "json.id == {{expectedId}}" {
+		t.Errorf("Raw should keep the template, got %q", r.Asserts[0].Assertion.Raw)
+	}
+}
+
 // TestResponseRefFlowsIntoLaterStep verifies inline response references
 // ({{name.response.body.$.path}}, {{name.response.headers.X}}) resolve against an
 // earlier named step's stored result, the way VS Code REST Client plans expect.

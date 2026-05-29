@@ -544,7 +544,11 @@ func (m Model) assertLines(r step.Result) string {
 		}
 		line := lipgloss.NewStyle().Foreground(c).Render(glyph+" ") + a.Assertion.Raw
 		if !a.Pass {
-			line += m.styles.dim.Render(fmt.Sprintf("  (got %q)", a.Got))
+			note := fmt.Sprintf("got %q", a.Got)
+			if a.Detail != "" {
+				note = a.Detail // a clearer reason than the bare value
+			}
+			line += m.styles.dim.Render("  (" + note + ")")
 		}
 		b.WriteString(truncate(line, m.viewport.Width) + "\n")
 	}

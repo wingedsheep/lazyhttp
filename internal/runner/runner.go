@@ -233,6 +233,11 @@ func (p *Plan) Evaluate(i int, r step.Result) step.Result {
 		}
 	}
 	for _, a := range p.Steps[i].Asserts {
+		// Expand {{vars}} on the right-hand side so an assertion can compare the
+		// response against a captured value (e.g. `json.id == {{newId}}`). Runs
+		// after captures above, so a value captured by this same step is visible.
+		// Want's original template survives in a.Raw, which is what the UI shows.
+		a.Want = p.Vars.ExpandFunc(a.Want, p.ResolveResponseRef)
 		r.Asserts = append(r.Asserts, capture.Check(a, r))
 	}
 	return r
