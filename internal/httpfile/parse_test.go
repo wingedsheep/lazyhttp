@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
@@ -151,6 +152,51 @@ func TestParseReset(t *testing.T) {
 	steps := Parse("### Clear\n# @reset\nDELETE /db\n", Vars{})
 	if len(steps) != 1 || !steps[0].Reset {
 		t.Fatalf("reset directive not parsed: %+v", steps)
+	}
+}
+
+func TestParsePerRequestDirectives(t *testing.T) {
+	steps := Parse("### Slow\n# @no-redirect\n# @timeout 5 s\nGET /slow\n", Vars{})
+	if len(steps) != 1 {
+		t.Fatalf("want 1 step, got %d", len(steps))
+	}
+	s := steps[0]
+	if !s.NoRedirect {
+		t.Errorf("NoRedirect = false, want true")
+	}
+	if s.Timeout != 5*time.Second {
+		t.Errorf("Timeout = %v, want 5s", s.Timeout)
+	}
+}
+
+func TestParseTimeout(t *testing.T) {
+	cases := []struct {
+		arg  string
+		want time.Duration // 0 means "should be ignored"
+	}{
+		{"30 s", 30 * time.Second},
+		{"500 ms", 500 * time.Millisecond},
+		{"2 m", 2 * time.Minute},
+		{"30s", 30 * time.Second},
+		{"15", 15 * time.Second}, // bare number defaults to seconds
+		{"abc", 0},
+		{"5 h", 0}, // unsupported unit
+		{"0 s", 0}, // non-positive ignored
+		{"", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.arg, func(t *testing.T) {
+			d, ok := parseTimeout(tc.arg)
+			if tc.want == 0 {
+				if ok {
+					t.Errorf("parseTimeout(%q) = %v, want ignored", tc.arg, d)
+				}
+				return
+			}
+			if !ok || d != tc.want {
+				t.Errorf("parseTimeout(%q) = %v (ok=%v), want %v", tc.arg, d, ok, tc.want)
+			}
+		})
 	}
 }
 

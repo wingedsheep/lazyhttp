@@ -2,11 +2,13 @@ package ui
 
 import "github.com/charmbracelet/bubbles/key"
 
-// keyMap defines every binding. k9s users will feel at home: hjkl-ish motion,
-// g/G to jump, ctrl+d/u for half-page leaps.
+// keyMap defines every binding. Arrows move (↑/↓ within a pane, ←/→ switch
+// panes), g/G jump to the ends, ctrl+d/u leap a half-page.
 type keyMap struct {
 	Up       key.Binding
 	Down     key.Binding
+	Left     key.Binding
+	Right    key.Binding
 	Top      key.Binding
 	Bottom   key.Binding
 	HalfUp   key.Binding
@@ -18,6 +20,7 @@ type keyMap struct {
 	Clear    key.Binding
 	ClearAll key.Binding
 	Request  key.Binding
+	Headers  key.Binding
 	Filter   key.Binding
 	Theme    key.Binding
 	Env      key.Binding
@@ -32,12 +35,30 @@ type keyMap struct {
 	// single file was opened directly. The `:` command itself is handled by App,
 	// not this keymap — Back is documentation only.
 	folderMode bool
+
+	// requestOn / headersOn mirror the model's showRequest / showHeaders toggles
+	// so the full-help overlay can mark the active ones with a ✓; the model syncs
+	// them whenever the toggle flips.
+	requestOn bool
+	headersOn bool
+}
+
+// withState returns b with a "✓" appended to its description when on, so a
+// toggle's current state shows in the help overlay.
+func withState(b key.Binding, on bool) key.Binding {
+	h := b.Help()
+	if on {
+		return key.NewBinding(key.WithKeys(b.Keys()...), key.WithHelp(h.Key, h.Desc+" ✓"))
+	}
+	return b
 }
 
 func newKeyMap() keyMap {
 	return keyMap{
-		Up:       key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-		Down:     key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		Up:       key.NewBinding(key.WithKeys("up"), key.WithHelp("↑", "up")),
+		Down:     key.NewBinding(key.WithKeys("down"), key.WithHelp("↓", "down")),
+		Left:     key.NewBinding(key.WithKeys("left"), key.WithHelp("←", "plan")),
+		Right:    key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "output")),
 		Top:      key.NewBinding(key.WithKeys("g", "home"), key.WithHelp("g", "first")),
 		Bottom:   key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G", "last")),
 		HalfUp:   key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "half-page up")),
@@ -48,7 +69,8 @@ func newKeyMap() keyMap {
 		Reload:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 		Clear:    key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "clear")),
 		ClearAll: key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "clear all")),
-		Request:  key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "toggle details")),
+		Request:  key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "request preview")),
+		Headers:  key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "response headers")),
 		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		Theme:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 		Env:      key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "switch env")),
@@ -73,13 +95,13 @@ func (k keyMap) ShortHelp() []key.Binding {
 
 // FullHelp is the expanded ? overlay, grouped into columns (satisfies help.KeyMap).
 func (k keyMap) FullHelp() [][]key.Binding {
-	last := []key.Binding{k.Request, k.Filter, k.Theme, k.Env, k.Copy, k.CopyAll}
+	last := []key.Binding{withState(k.Request, k.requestOn), withState(k.Headers, k.headersOn), k.Filter, k.Theme, k.Env, k.Copy, k.CopyAll}
 	if k.folderMode {
 		last = append(last, k.Back)
 	}
-	last = append(last, k.Focus, k.Help, k.Quit)
+	last = append(last, k.Help, k.Quit)
 	return [][]key.Binding{
-		{k.Up, k.Down, k.Top, k.Bottom, k.HalfUp, k.HalfDn},
+		{k.Up, k.Down, k.Left, k.Right, k.Top, k.Bottom, k.HalfUp, k.HalfDn},
 		{k.Run, k.RunAll, k.Clear, k.ClearAll, k.Reload},
 		last,
 	}

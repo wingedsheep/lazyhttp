@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
@@ -34,6 +35,56 @@ func TestRunHTTP(t *testing.T) {
 	// JSON body should be pretty-printed (indented).
 	if msg.Result.Body != "{\n  \"id\": 42\n}" {
 		t.Errorf("body not pretty-printed: %q", msg.Result.Body)
+	}
+}
+
+// TestRunHTTPNoRedirect verifies a step marked # @no-redirect returns the 3xx
+// response itself rather than following the Location header.
+func TestRunHTTPNoRedirect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/start" {
+			http.Redirect(w, r, "/landing", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	got := Do(step.Step{Kind: step.KindHTTP, Method: "GET", URL: srv.URL + "/start", NoRedirect: true}, nil)
+	if got.StatusCode != http.StatusFound {
+		t.Errorf("status: want 302 (not followed), got %d", got.StatusCode)
+	}
+	if loc := got.Header.Get("Location"); loc != "/landing" {
+		t.Errorf("Location: want /landing, got %q", loc)
+	}
+	// The 3xx is the expected outcome for a no-redirect step, so it counts as OK.
+	if !got.OK() {
+		t.Errorf("a no-redirect 302 should be OK, got not-OK")
+	}
+
+	// Without the directive the redirect is followed to the 200.
+	followed := Do(step.Step{Kind: step.KindHTTP, Method: "GET", URL: srv.URL + "/start"}, nil)
+	if followed.StatusCode != http.StatusOK {
+		t.Errorf("status: want 200 (followed), got %d", followed.StatusCode)
+	}
+}
+
+// TestRunHTTPTimeout verifies a per-request # @timeout aborts a slow response.
+func TestRunHTTPTimeout(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release // block until the test lets the handler finish
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	got := Do(step.Step{Kind: step.KindHTTP, Method: "GET", URL: srv.URL, Timeout: 50 * time.Millisecond}, nil)
+	if got.Err == nil {
+		t.Fatalf("expected a timeout error, got status %d", got.StatusCode)
+	}
+	if got.Status != step.Failed {
+		t.Errorf("status: want Failed, got %v", got.Status)
 	}
 }
 

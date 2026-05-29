@@ -48,6 +48,8 @@ All directives are `#` comments. They are case-sensitive and use a **single** `#
 | `# @shell` | Treat the step body as a shell script instead of an HTTP request. |
 | `# @reset` | When this step succeeds, clear every other step's result and drop captured variables — a clean-slate anchor to "run from here". |
 | `# @import <path>` | Splice another `.http` file's steps in at this point. See [Composing plans with `@import`](#composing-plans-with-import). |
+| `# @timeout <n> <unit>` | Override the shared 30s timeout for this request. See [Per-request settings](#per-request-settings). |
+| `# @no-redirect` | Don't follow 3xx redirects; return the redirect response itself. See [Per-request settings](#per-request-settings). |
 
 You can repeat `# @capture` and `# @assert` as many times as you like in one step.
 Plain `#` comments with no recognized directive are simply ignored.
@@ -334,6 +336,33 @@ be read, the step fails with the read error rather than sending an empty body.
 Toggle the request preview (`i`) to see the resolved `body from < path` and its
 contents.
 
+## Per-request settings
+
+Two directives override the default request behavior for a single step. Both are
+HTTP-only; they're ignored on `# @shell` steps.
+
+```
+### Slow report — give it longer, and don't chase redirects
+# @timeout 90 s
+# @no-redirect
+GET {{api}}/reports/export
+```
+
+- **`# @timeout <n> <unit>`** replaces the shared 30-second client timeout for
+  this request. Units are `ms`, `s`, and `m`; a bare number (`# @timeout 45`) is
+  read as seconds. The combined form (`# @timeout 500ms`) works too. A
+  zero/negative value or an unknown unit is ignored, leaving the 30s default.
+- **`# @no-redirect`** stops the client following `3xx` `Location` headers, so the
+  redirect response itself is returned — handy for asserting on the redirect
+  (`# @assert status == 302`, `# @assert header.Location matches ^/orders/\d+$`).
+  For a `@no-redirect` step a `3xx` counts as **success** (it's the outcome you
+  asked for), so the step stays green and a "run from here" chain continues;
+  without the directive a leaked `3xx` is still treated as a failure.
+
+Both apply identically in the TUI and in headless `lazyhttp run`. When the request
+preview (`i`) is open, an active setting shows as a `⚙ timeout 90s · no-redirect`
+line under the request.
+
 ## Composing plans with `@import`
 
 A shared login flow, a set of common headers, or a block of `@var` definitions
@@ -423,9 +452,10 @@ Each entry lists the upstream syntax and what lazyhttp does with it today.
 - **Pre-request scripts** — `< {% request.variables.set(...) %}`.
   Recognized as a script and ignored (not sent as a body). The variables it would
   set are not applied.
-- **Per-request settings** — `# @no-redirect`, `# @no-cookie-jar`, `# @no-log`,
-  `# @timeout 30 s`, `# @prompt {pw}`, `# @note`.
-  Unrecognized directives are ignored (treated as plain comments).
+- **Per-request settings** — `# @no-cookie-jar`, `# @no-log`, `# @prompt {pw}`,
+  `# @note`. Unrecognized directives are ignored (treated as plain comments).
+  (`# @no-redirect` and `# @timeout` *are* supported — see
+  [Per-request settings](#per-request-settings).)
 - **Multipart / form-data uploads** — `Content-Type: multipart/form-data; boundary=...`
   with `< ./file` parts. The body text is sent as-is; file parts are not read or attached.
 - **GraphQL requests** — header `X-REQUEST-TYPE: GraphQL` followed by a query and
@@ -444,8 +474,7 @@ Each entry lists the upstream syntax and what lazyhttp does with it today.
 - **`$shared` / private env files** — `$shared` env, `http-client.private.env.json`.
   Only `http-client.env.json` is read; the named env is used as-is.
 
-If you hit one of these and want it supported, it's worth opening an issue —
-several (per-request directives, response references) are good candidates.
+If you hit one of these and want it supported, it's worth opening an issue.
 
 ## Windows notes
 

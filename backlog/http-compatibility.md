@@ -110,10 +110,23 @@ section is kept for reference.
 
 ---
 
-## Phase 3 — Per-request directives + `Basic` auth encoding
+## Phase 3 — Per-request directives + `Basic` auth encoding — ✅ shipped
 
 **Value:** medium-high. **Effort:** small. These fit lazyhttp's existing `# @`
 design and remove two surprising behaviors.
+
+> Shipped. `Basic` auth base64 encoding landed first in `internal/exec/basicauth.go`
+> (`encodeBasicAuth`, applied in `runHTTP`), handling the `Basic user pass`,
+> `Basic user:pass`, and pre-encoded forms. The two per-request directives followed:
+> `# @timeout <n> <unit>` (`ms`/`s`/`m`, bare number = seconds) and `# @no-redirect`
+> parse in `applyDirective` (`parse.go`, via `parseTimeout`) onto new `Timeout` /
+> `NoRedirect` fields on `step.Step`; `clientFor` (`http.go`) builds a per-request
+> client overriding just those fields when either is set, leaving the shared client
+> otherwise. A `@no-redirect` step's `3xx` counts as success — `step.Result` carries
+> a `NoRedirect` bit so `Result.OK()` widens its accepted range to `< 400` only for
+> those steps. The TUI request preview shows an active `⚙ timeout … · no-redirect`
+> line. The interactive `# @prompt` / `# @note` directives remain deferred. The rest
+> of this section is kept for reference.
 
 ### Changes
 

@@ -23,7 +23,7 @@ type openPlanMsg struct{ Path string }
 
 // browser is the folder overview: a scrollable, filterable list of the .http /
 // .rest plans discovered under a root directory, grouped by subfolder. It mirrors
-// the step list's navigation (hjkl/g/G/^u^d, `/` filter, windowed scrolling) so
+// the step list's navigation (arrows/g/G/^u^d, `/` filter, windowed scrolling) so
 // the two screens feel like one app. Selecting a row emits an openPlanMsg.
 type browser struct {
 	index  httpfile.PlanIndex
@@ -502,8 +502,8 @@ type browserKeyMap struct {
 
 func newBrowserKeyMap() browserKeyMap {
 	return browserKeyMap{
-		Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-		Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		Up:     key.NewBinding(key.WithKeys("up"), key.WithHelp("↑", "up")),
+		Down:   key.NewBinding(key.WithKeys("down"), key.WithHelp("↓", "down")),
 		Top:    key.NewBinding(key.WithKeys("g", "home"), key.WithHelp("g", "first")),
 		Bottom: key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G", "last")),
 		HalfUp: key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "half-page up")),

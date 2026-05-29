@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
@@ -220,6 +222,12 @@ func applyDirective(s *step.Step, directive string) {
 		s.Kind = step.KindShell
 	case directive == "@reset":
 		s.Reset = true
+	case directive == "@no-redirect":
+		s.NoRedirect = true
+	case strings.HasPrefix(directive, "@timeout"):
+		if d, ok := parseTimeout(strings.TrimPrefix(directive, "@timeout")); ok {
+			s.Timeout = d
+		}
 	case strings.HasPrefix(directive, "@import"):
 		s.Import = strings.TrimSpace(strings.TrimPrefix(directive, "@import"))
 	case strings.HasPrefix(directive, "@name"):
@@ -239,6 +247,45 @@ func applyDirective(s *step.Step, directive string) {
 		if a, ok := parseAssertion(rest); ok {
 			s.Asserts = append(s.Asserts, a)
 		}
+	}
+}
+
+// parseTimeout reads a `@timeout` argument into a Duration. It accepts the
+// IntelliJ space-separated form (`30 s`, `500 ms`, `2 m`), the combined form
+// (`30s`), and a bare number (defaulting to seconds). Recognized units are
+// `ms`, `s`, and `m`; anything else, or a non-positive number, returns ok=false
+// so the directive is ignored and the shared 30s timeout stands.
+func parseTimeout(arg string) (time.Duration, bool) {
+	fields := strings.Fields(arg)
+	var num, unit string
+	switch len(fields) {
+	case 0:
+		return 0, false
+	case 1:
+		// "30s" → split digits from unit; "30" → bare number (seconds below).
+		f := fields[0]
+		i := strings.IndexFunc(f, func(r rune) bool { return r < '0' || r > '9' })
+		if i < 0 {
+			num, unit = f, "s"
+		} else {
+			num, unit = f[:i], f[i:]
+		}
+	default:
+		num, unit = fields[0], fields[1]
+	}
+	n, err := strconv.Atoi(num)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	switch strings.ToLower(unit) {
+	case "ms":
+		return time.Duration(n) * time.Millisecond, true
+	case "s":
+		return time.Duration(n) * time.Second, true
+	case "m":
+		return time.Duration(n) * time.Minute, true
+	default:
+		return 0, false
 	}
 }
 

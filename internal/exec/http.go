@@ -12,6 +12,30 @@ import (
 // httpClient is shared across requests; 30s is generous for a manual runner.
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
+// noRedirect is the CheckRedirect that makes a client return the 3xx response
+// itself instead of following the Location header (for `# @no-redirect` steps).
+func noRedirect(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
+// clientFor returns the client to send s with. Most steps reuse the shared
+// httpClient; a step carrying a per-request `# @timeout` or `# @no-redirect`
+// gets a shallow copy with just those fields overridden, leaving the shared
+// client (and its transport/connection pool) untouched.
+func clientFor(s step.Step) *http.Client {
+	if s.Timeout == 0 && !s.NoRedirect {
+		return httpClient
+	}
+	c := *httpClient
+	if s.Timeout > 0 {
+		c.Timeout = s.Timeout
+	}
+	if s.NoRedirect {
+		c.CheckRedirect = noRedirect
+	}
+	return &c
+}
+
 // doHTTP builds and sends the request described by s, returning its Result. When
 // auth is non-nil it first resolves any {{$auth.token(...)}} placeholders
 // (fetching/caching a token); a token failure fails the step like a transport
@@ -43,7 +67,7 @@ func doHTTP(s step.Step, auth AuthResolver) step.Result {
 		req.Header.Set(k, v)
 	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := clientFor(s).Do(req)
 	if err != nil {
 		return fail(err)
 	}
@@ -60,5 +84,6 @@ func doHTTP(s step.Step, auth AuthResolver) step.Result {
 		Header:     resp.Header,
 		Body:       prettyJSON(resp.Header.Get("Content-Type"), body),
 		Duration:   time.Since(start),
+		NoRedirect: s.NoRedirect,
 	}
 }

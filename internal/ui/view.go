@@ -298,6 +298,51 @@ func (m Model) renderList() string {
 	return header + "\n" + strings.Join(lines, "\n")
 }
 
+// listBodyTop is the screen row (0-based) where the step list's first body row
+// is drawn: the status bar (1) + the pane's top border (1) + the STEPS header
+// and its underline (2). Vertical pane padding is 0, so no extra offset.
+const listBodyTop = 4
+
+// listLineSteps returns, for each body row currently drawn in the step list
+// (after the same windowing renderList applies), the absolute step index shown
+// there, or -1 for a group-heading row. It mirrors renderList's group/window
+// logic so a mouse click can map a screen row back to a step — keep the two in
+// sync.
+func (m Model) listLineSteps() []int {
+	vis := m.visible()
+	steps := make([]int, 0, len(vis))
+	cursorLine := 0
+	group := ""
+	for _, i := range vis {
+		if g := m.plan.Steps[i].Group; g != group {
+			group = g
+			if group != "" {
+				steps = append(steps, -1) // a group-heading row maps to no step
+			}
+		}
+		if i == m.cursor {
+			cursorLine = len(steps)
+		}
+		steps = append(steps, i)
+	}
+	if budget := max(m.contentH-2, 1); len(steps) > budget {
+		start := clamp(cursorLine-budget/2, 0, len(steps)-budget)
+		steps = steps[start : start+budget]
+	}
+	return steps
+}
+
+// stepAtRow maps a screen row y to the step drawn there in the list pane, if the
+// row holds a step (not a group heading or empty space).
+func (m Model) stepAtRow(y int) (int, bool) {
+	k := y - listBodyTop
+	lines := m.listLineSteps()
+	if k < 0 || k >= len(lines) || lines[k] < 0 {
+		return 0, false
+	}
+	return lines[k], true
+}
+
 // stepsHeader draws the STEPS pane header with a right-aligned progress bar
 // reporting how many steps have run out of the total. It sits at the top of the
 // (left) list pane so overall progress is obvious at a glance, rather than
@@ -475,6 +520,22 @@ func (m Model) scrollIndicator() string {
 	return fmt.Sprintf("%s%s %d%%", up, down, int(m.viewport.ScrollPercent()*100))
 }
 
+// requestOpts renders the per-request directives (`# @timeout`, `# @no-redirect`)
+// as a single dim line for the request preview, or "" when neither is set.
+func requestOpts(s step.Step) string {
+	var opts []string
+	if s.Timeout > 0 {
+		opts = append(opts, "timeout "+s.Timeout.String())
+	}
+	if s.NoRedirect {
+		opts = append(opts, "no-redirect")
+	}
+	if len(opts) == 0 {
+		return ""
+	}
+	return "⚙ " + strings.Join(opts, " · ")
+}
+
 // formatResult builds the full request+response text for step i, with all
 // {{vars}} expanded against the current variable set so the preview matches
 // what will actually run.
@@ -487,7 +548,7 @@ func (m Model) formatResult(i int) string {
 
 	// Request preview — optional, toggled with `i`. Off by default so the
 	// response output gets the full pane.
-	if m.showDetails {
+	if m.showRequest {
 		if s.Kind == step.KindShell {
 			b.WriteString(m.styles.dim.Render("$ shell") + "\n")
 			b.WriteString(s.Body + "\n")
@@ -496,6 +557,9 @@ func (m Model) formatResult(i int) string {
 				Render(s.Method) + " " + s.URL + "\n")
 			for k, v := range s.Headers {
 				b.WriteString(m.styles.dim.Render(k+": "+v) + "\n")
+			}
+			if opts := requestOpts(s); opts != "" {
+				b.WriteString(m.styles.dim.Render(opts) + "\n")
 			}
 			switch {
 			case s.BodyFile != "":
@@ -535,8 +599,8 @@ func (m Model) formatResult(i int) string {
 				Render(r.Err.Error()))
 			break
 		}
-		// Response headers are detail, hidden unless toggled with `i`.
-		if m.showDetails && s.Kind == step.KindHTTP {
+		// Response headers are detail, hidden unless toggled with `h`.
+		if m.showHeaders && s.Kind == step.KindHTTP {
 			for k, v := range r.Header {
 				b.WriteString(m.styles.dim.Render(k+": "+strings.Join(v, ", ")) + "\n")
 			}

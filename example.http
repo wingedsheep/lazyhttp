@@ -177,6 +177,19 @@ Content-Type: application/json
 
 <@ ./example.body.json
 
+### Catch a redirect instead of following it
+### `# @no-redirect` returns the 3xx response itself, so we can assert on the
+### status and Location header. `# @timeout 10 s` gives this one request a longer
+### deadline than the shared 30s default would shorten (units: ms / s / m).
+### Toggle the request preview (`i`) to see the active ⚙ settings line.
+# @group Echo
+# @name Redirect (not followed)
+# @no-redirect
+# @timeout 10 s
+# @assert status == 302
+# @assert header.Location == /anything
+GET {{bin}}/redirect-to?url=/anything&status_code=302
+
 ### Print everything captured so far
 ### IntelliJ treats this block as a comment, so the file stays valid there.
 # @group Utilities

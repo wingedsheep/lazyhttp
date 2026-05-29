@@ -34,6 +34,14 @@ type Step struct {
 	BodyFile     string
 	BodyFileVars bool
 
+	// Timeout overrides the shared 30s client timeout for this request when set
+	// by a `# @timeout <n> <unit>` directive; zero means use the default.
+	// NoRedirect, from `# @no-redirect`, stops the client following 3xx Location
+	// headers so the redirect response itself is returned. Both are HTTP-only and
+	// cause the executor to build a per-request client instead of the shared one.
+	Timeout    time.Duration
+	NoRedirect bool
+
 	Captures []Capture   // values to extract from the response
 	Asserts  []Assertion // checks to run against the response
 	Reset    bool        // when this step succeeds, reset the rest of the plan
@@ -94,6 +102,11 @@ type Result struct {
 	Duration   time.Duration   // wall-clock time of the execution
 	Err        error           // transport/spawn error, if any
 	Asserts    []AssertOutcome // evaluated assertions, if any
+
+	// NoRedirect records that the request was sent with `# @no-redirect`, so a
+	// 3xx is the expected, successful outcome rather than an error. OK() widens
+	// its accepted status range to include 3xx only when this is set.
+	NoRedirect bool
 }
 
 // OK reports whether a finished result represents success: a 2xx response for
@@ -106,7 +119,14 @@ func (r Result) OK() bool {
 		return false
 	}
 	if r.StatusCode != 0 {
-		return r.StatusCode >= 200 && r.StatusCode < 300
+		// A 3xx is success only for a step that asked not to follow redirects
+		// (it deliberately wants the redirect response); otherwise a leaked 3xx
+		// — e.g. a redirect loop the client gave up on — is an error.
+		hi := 300
+		if r.NoRedirect {
+			hi = 400
+		}
+		return r.StatusCode >= 200 && r.StatusCode < hi
 	}
 	return r.ExitCode == 0
 }

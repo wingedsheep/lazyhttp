@@ -209,6 +209,40 @@ func newModel(p *runner.Plan, runFrom int) Model {
 	return Model{plan: p, runFrom: runFrom}
 }
 
+// TestStepAtRow checks the mouse hit-testing maps screen rows to steps, skipping
+// group-heading rows, with no windowing in play.
+func TestStepAtRow(t *testing.T) {
+	m := newModel(&runner.Plan{
+		Steps: []step.Step{
+			{Name: "a", Group: "G1"},
+			{Name: "b", Group: "G1"},
+			{Name: "c", Group: "G2"},
+		},
+	}, -1)
+	m.contentH = 20 // tall enough that the window holds every row
+
+	// Body rows (screen Y, listBodyTop=4): 4=heading G1, 5=a, 6=b, 7=heading G2, 8=c.
+	cases := []struct {
+		y      int
+		want   int
+		wantOK bool
+	}{
+		{3, 0, false}, // above the first body row
+		{4, 0, false}, // group heading
+		{5, 0, true},  // step a
+		{6, 1, true},  // step b
+		{7, 0, false}, // group heading
+		{8, 2, true},  // step c
+		{9, 0, false}, // below the last row
+	}
+	for _, tc := range cases {
+		got, ok := m.stepAtRow(tc.y)
+		if ok != tc.wantOK || (ok && got != tc.want) {
+			t.Errorf("stepAtRow(%d) = (%d, %v), want (%d, %v)", tc.y, got, ok, tc.want, tc.wantOK)
+		}
+	}
+}
+
 // TestRunFromHereChains verifies the run-from-here chain stops on failure.
 func TestRunFromHereChains(t *testing.T) {
 	m := newModel(&runner.Plan{

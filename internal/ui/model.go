@@ -51,9 +51,11 @@ type Model struct {
 	// the spinner only while a step runs and stay completely idle otherwise.
 	spinning bool
 
-	// showDetails toggles the request preview and the response headers on the
-	// right; off by default so the response output gets the whole pane.
-	showDetails bool
+	// showRequest toggles the request preview (method/URL/headers/body) at the
+	// top of the right pane; showHeaders toggles the response headers above the
+	// body. Both off by default so the response body gets the whole pane.
+	showRequest bool
+	showHeaders bool
 
 	// filter narrows the visible step list to those matching a case-insensitive
 	// substring of "method name group"; filtering is true while it's being typed.
@@ -240,9 +242,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// onMouse routes the scroll wheel: it scrolls the response body when that pane
-// is focused, otherwise it moves through the step list (k9s-style).
+// onMouse routes mouse input. A left click selects the pane under the cursor
+// and, on a step row in the list, runs that step. The scroll wheel scrolls the
+// response body when that pane is focused, otherwise it moves through the list.
 func (m Model) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+		if m.envPicking || m.filtering {
+			return m, nil // a modal owns the screen; ignore stray clicks
+		}
+		// The list pane occupies the leftmost listW+4 columns (content + padding +
+		// border); anything to the right is the result pane.
+		if msg.X >= m.listW+4 {
+			m.focus = focusResult
+			return m, nil
+		}
+		m.focus = focusList
+		if i, ok := m.stepAtRow(msg.Y); ok {
+			m.setCursor(i)
+			return m, m.run(i)
+		}
+		return m, nil
+	}
+
 	if m.focus == focusResult {
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -346,13 +367,28 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.toggleFocus()
 		return m, nil
 
+	case key.Matches(msg, m.keys.Left):
+		m.focus = focusList
+		return m, nil
+
+	case key.Matches(msg, m.keys.Right):
+		m.focus = focusResult
+		return m, nil
+
 	case key.Matches(msg, m.keys.Reload):
 		m.load()
 		m.refreshResult()
 		return m, nil
 
 	case key.Matches(msg, m.keys.Request):
-		m.showDetails = !m.showDetails
+		m.showRequest = !m.showRequest
+		m.keys.requestOn = m.showRequest
+		m.refreshResult()
+		return m, nil
+
+	case key.Matches(msg, m.keys.Headers):
+		m.showHeaders = !m.showHeaders
+		m.keys.headersOn = m.showHeaders
 		m.refreshResult()
 		return m, nil
 

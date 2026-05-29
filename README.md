@@ -79,7 +79,7 @@ lazyhttp .            # browse all plans under the current directory
 lazyhttp ./api-tests  # …or any folder
 ```
 
-Navigate with the same keys as the step list (`↑/k` `↓/j`, `g`/`G`, `^u`/`^d`, `/` to
+Navigate with the same keys as the step list (`↑` `↓`, `g`/`G`, `^u`/`^d`, `/` to
 filter by path), press `enter` to open the highlighted plan, and — k9s style — type
 `:files` to jump back to the overview. Dot-directories, `node_modules`, and `vendor`
 are skipped.
@@ -130,20 +130,26 @@ a named environment and its values fill in `{{vars}}`:
 
 | Key            | Action                  |
 | -------------- | ----------------------- |
-| `↑/k` `↓/j`    | move                    |
+| `↑` / `↓`      | move through steps / scroll the focused pane |
+| `←` / `→`      | focus the plan / output pane |
+| `tab`          | toggle pane focus       |
 | `g` / `G`      | first / last step       |
 | `^u` / `^d`    | half-page up / down     |
 | `enter` / `e`  | run the selected step   |
 | `a`            | run from here onward    |
 | `r`            | reload the file         |
 | `c` / `C`      | clear result / clear all|
-| `i`            | toggle request details  |
+| `i`            | toggle request preview  |
+| `h`            | toggle response headers |
 | `/`            | filter steps            |
 | `t`            | cycle colour theme      |
 | `E`            | switch environment      |
 | `y` / `Y`      | copy body / response pane to clipboard |
 | `?`            | full help               |
 | `q` / `^c`     | quit                    |
+
+You can also **click** a step in the plan pane to select and run it, click either
+pane to focus it, and scroll with the mouse wheel.
 
 In folder mode the overview shares the motion keys above; `enter` opens the
 highlighted plan, and `:files` (or `Esc`) returns to the overview from an open
