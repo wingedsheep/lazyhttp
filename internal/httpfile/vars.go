@@ -147,6 +147,12 @@ func (v Vars) Expand(s string) string {
 	return v.ExpandFunc(s, nil)
 }
 
+// maxExpandDepth caps how many levels of nested variable references Expand will
+// follow (host → baseUrl → request). It is a runaway guard: the per-path cycle
+// check below already stops self-referential definitions exactly where they
+// loop, so this only bounds pathological non-cyclic fan-out.
+const maxExpandDepth = 10
+
 // ExpandFunc is Expand with an extra resolver consulted first for each
 // placeholder. It lets callers that hold context the variable map can't —
 // notably the UI, which resolves inline response references against stored
@@ -154,12 +160,30 @@ func (v Vars) Expand(s string) string {
 // trimmed token and returns ok=true to claim it; a nil resolver, or one that
 // declines, falls back to dynamic variables and then the variable map, leaving
 // unknown placeholders untouched.
+//
+// Variable-map values are expanded transitively: when {{baseUrl}} resolves to
+// "{{host}}/v2", that result is rescanned so {{host}} resolves too, matching
+// the composed-variable convention of IntelliJ HTTP Client and VS Code REST
+// Client. Only variable-map values recurse — dynamic variables ({{$uuid}}) and
+// resolver-provided values (captured response data) are inserted verbatim and
+// never rescanned, so a dynamic value is evaluated exactly once and a response
+// body that happens to contain literal "{{...}}" is not re-expanded.
 func (v Vars) ExpandFunc(s string, resolve func(token string) (string, bool)) string {
+	return v.expand(s, resolve, nil, 0)
+}
+
+// expand is the recursive core of ExpandFunc. seen is the chain of variable-map
+// tokens currently being expanded, used to break reference cycles; depth bounds
+// non-cyclic nesting against maxExpandDepth.
+func (v Vars) expand(s string, resolve func(token string) (string, bool), seen []string, depth int) string {
+	if depth >= maxExpandDepth {
+		return s
+	}
 	return varPattern.ReplaceAllStringFunc(s, func(match string) string {
 		token := strings.TrimSpace(varPattern.FindStringSubmatch(match)[1])
 		if resolve != nil {
 			if val, ok := resolve(token); ok {
-				return val
+				return val // terminal: response data is not rescanned
 			}
 		}
 		// Dynamic variables ({{$uuid}}, {{$randomInt 0 9}}) resolve before the
@@ -167,12 +191,19 @@ func (v Vars) ExpandFunc(s string, resolve func(token string) (string, bool)) st
 		if strings.HasPrefix(token, "$") {
 			fields := strings.Fields(token)
 			if val, ok := dynamic(fields[0], fields[1:]); ok {
-				return val
+				return val // terminal: dynamic value evaluated exactly once
 			}
 			return match
 		}
 		if val, ok := v[token]; ok {
-			return val
+			// A token already on the current chain is a cycle (a = {{b}},
+			// b = {{a}}); leave it literal rather than recursing forever.
+			for _, s := range seen {
+				if s == token {
+					return match
+				}
+			}
+			return v.expand(val, resolve, append(seen, token), depth+1)
 		}
 		return match
 	})

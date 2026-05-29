@@ -63,3 +63,43 @@ func TestExpandFuncResolver(t *testing.T) {
 		t.Errorf("nil resolver = %q, want the placeholder untouched", got)
 	}
 }
+
+// TestExpandNested verifies a variable whose value references another variable
+// expands transitively — the composed-variable convention of IntelliJ HTTP
+// Client and VS Code REST Client.
+func TestExpandNested(t *testing.T) {
+	v := Vars{
+		"host":    "https://api.dev",
+		"baseUrl": "{{host}}/v2",
+		"orders":  "{{baseUrl}}/orders",
+	}
+	if got, want := v.Expand("{{orders}}"), "https://api.dev/v2/orders"; got != want {
+		t.Errorf("Expand = %q, want %q", got, want)
+	}
+}
+
+// TestExpandCycle verifies a self-referential definition is left literal after
+// the chain folds back on itself, rather than looping forever.
+func TestExpandCycle(t *testing.T) {
+	v := Vars{"a": "{{b}}", "b": "{{a}}"}
+	// {{a}} → {{b}} → {{a}}; the second {{a}} is on the chain, so it stops.
+	if got, want := v.Expand("{{a}}"), "{{a}}"; got != want {
+		t.Errorf("Expand = %q, want %q", got, want)
+	}
+}
+
+// TestExpandDynamicOnce verifies dynamic and resolver-provided values are
+// terminal: a resolved value that itself contains literal "{{...}}" (e.g.
+// captured response data) is inserted verbatim, not re-expanded.
+func TestExpandDynamicOnce(t *testing.T) {
+	v := Vars{"host": "example.com"}
+	resolve := func(token string) (string, bool) {
+		if token == "captured" {
+			return "{{host}}", true // response data that looks like a placeholder
+		}
+		return "", false
+	}
+	if got, want := v.ExpandFunc("{{captured}}", resolve), "{{host}}"; got != want {
+		t.Errorf("ExpandFunc = %q, want %q (response data must not re-expand)", got, want)
+	}
+}

@@ -86,6 +86,16 @@ Use `{{name}}` anywhere in a URL, header, or body. Placeholders are expanded at
 below it. An unknown variable is left as-is (e.g. `{{missing}}`) so you can see
 what failed to resolve.
 
+Variables can be **composed** from other variables: if a value contains a
+`{{…}}` reference, that reference is resolved too, and so on. So `host =
+https://api.dev`, `baseUrl = {{host}}/v2`, and a request to `{{baseUrl}}/orders`
+reaches `https://api.dev/v2/orders`. This pairs with `{{$processEnv …}}` — define
+a host or token once as `baseUrl = {{$processEnv API_BASE}}` and reference
+`{{baseUrl}}` everywhere. A self-referential cycle (`a = {{b}}`, `b = {{a}}`) is
+left literal rather than looping. Note that captured response data and dynamic
+values are inserted as-is and **not** re-expanded, so a response body containing
+literal `{{…}}` stays intact.
+
 Values come from three places, later ones overriding earlier:
 
 1. **The environment file** — `http-client.env.json` selected with `--env`.
