@@ -1,0 +1,14 @@
+# Compiled binary (built locally / by `go build -o bin/`)
+/bin/
+
+# Go
+*.test
+*.out
+
+# Editor / OS
+.DS_Store
+.idea/
+*.iml
+
+# Local tooling
+.claude/

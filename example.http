@@ -1,0 +1,137 @@
+# Example test plan for lazy-http
+#
+# A real create → read → update → delete round-trip that actually persists,
+# followed by an "echo" section that asserts on what the server received.
+# No auth, keys, or setup required — just open it and hit "run from here" on the
+# first step (or run any step on its own). It's designed to go green top-to-bottom.
+#
+# This file is also valid in the IntelliJ HTTP Client / VS Code REST Client.
+#
+#   api.restful-api.dev  a free CRUD store: POST returns an id we can then GET,
+#                        PUT, PATCH and DELETE for real — so captured ids work.
+#   httpbin.org          echoes the request back as JSON, so we can assert on the
+#                        method, query string, headers and body the server saw.
+#
+# Tip: assertion values are compared literally — {{vars}} are expanded in URLs,
+# headers and bodies, but NOT on the right-hand side of an @assert.
+#
+# Hosts and the token come from http-client.env.json, so pick an environment:
+#   lazy-http --env dev example.http
+# Only @gadget is defined inline below (it's request data, not environment).
+
+@gadget = lazy-http tracker
+
+### List all objects — also our reset anchor
+### Marked with @reset: when it succeeds, lazy-http clears every other step's
+### result and drops captured variables, returning the plan to a clean slate.
+# @group Setup
+# @reset
+# @name Reset state
+# @assert status == 200
+GET {{api}}/objects
+Accept: application/json
+
+### Read a known sample object
+# @group Smoke
+# @assert status == 200
+# @assert json.id == 1
+# @assert json.name contains Pixel
+# @assert header.Content-Type contains json
+GET {{api}}/objects/1
+Accept: application/json
+
+### Create a gadget
+### Capture its id so every later step in this group can act on the same object.
+# @group CRUD
+# @name Create gadget
+# @capture id = json.id
+# @capture createdName = json.name
+# @assert status == 200
+# @assert json.name == lazy-http tracker
+# @assert json.data.inStock == true
+# @assert json.data.year exists
+POST {{api}}/objects
+Content-Type: application/json
+
+{
+  "name": "{{gadget}}",
+  "data": { "year": 2026, "price": 42.5, "inStock": true }
+}
+
+### Fetch the gadget we just created (uses the captured id)
+### This is the round-trip that actually works: the object really exists now.
+# @name Read it back
+# @assert status == 200
+# @assert json.name == lazy-http tracker
+# @assert json.data.year == 2026
+# @assert json.id != 1
+GET {{api}}/objects/{{id}}
+Accept: application/json
+
+### Replace it wholesale (PUT)
+# @name Update gadget
+# @assert status == 200
+# @assert json.name == lazy-http tracker v2
+# @assert json.data.price == 39
+PUT {{api}}/objects/{{id}}
+Content-Type: application/json
+
+{
+  "name": "lazy-http tracker v2",
+  "data": { "year": 2026, "price": 39.0 }
+}
+
+### Tweak a single field (PATCH)
+# @name Patch name
+# @assert status == 200
+# @assert json.name == lazy-http tracker v3
+PATCH {{api}}/objects/{{id}}
+Content-Type: application/json
+
+{
+  "name": "lazy-http tracker v3"
+}
+
+### Delete it
+# @name Delete gadget
+# @assert status == 200
+# @assert json.message contains deleted
+DELETE {{api}}/objects/{{id}}
+
+### Authenticated request — Bearer token in a header
+### Shows {{token}} expanding inside a header value.
+# @group Echo
+# @name Bearer auth
+# @assert status == 200
+# @assert json.authenticated == true
+# @assert json.token == s3cr3t-demo-token
+GET {{bin}}/bearer
+Authorization: Bearer {{token}}
+Accept: application/json
+
+### Echo a POST and assert on what the server received
+### httpbin reflects the method, query args, headers and parsed JSON body back.
+# @name Echo round-trip
+# @capture echoIp = json.origin
+# @assert status == 200
+# @assert json.method == POST
+# @assert json.args.team == lazy
+# @assert json.headers.X-Demo == lazy-http
+# @assert json.json.ping == pong
+POST {{bin}}/anything?team=lazy
+Content-Type: application/json
+X-Demo: lazy-http
+
+{
+  "ping": "pong"
+}
+
+### Print everything captured so far
+### IntelliJ treats this block as a comment, so the file stays valid there.
+# @group Utilities
+# @shell
+# @name Echo captured values
+# @assert status == 0
+echo "Created object id : {{id}}"
+echo "Server named it   : {{createdName}}"
+echo "Echo saw origin   : {{echoIp}}"
