@@ -68,6 +68,22 @@ lazyhttp --env dev example.http        # pick an environment from http-client.en
 lazyhttp --theme dracula example.http  # set a colour theme (cycle in-app with `t`)
 ```
 
+### Folder mode
+
+Point it at a **directory** and lazyhttp lists every `.http` / `.rest` plan beneath
+it (grouped by subfolder, with each file's step count), so a repo full of request
+collections opens as one browsable overview:
+
+```sh
+lazyhttp .            # browse all plans under the current directory
+lazyhttp ./api-tests  # …or any folder
+```
+
+Navigate with the same keys as the step list (`↑/k` `↓/j`, `g`/`G`, `^u`/`^d`, `/` to
+filter by path), press `enter` to open the highlighted plan, and — k9s style — type
+`:files` to jump back to the overview. Dot-directories, `node_modules`, and `vendor`
+are skipped.
+
 ### Headless / CI
 
 `lazyhttp run <plan.http>` executes a plan top-to-bottom without the TUI, prints a
@@ -125,8 +141,15 @@ a named environment and its values fill in `{{vars}}`:
 | `/`            | filter steps            |
 | `t`            | cycle colour theme      |
 | `E`            | switch environment      |
+| `y` / `Y`      | copy body / response pane to clipboard |
 | `?`            | full help               |
 | `q` / `^c`     | quit                    |
+
+In folder mode the overview shares the motion keys above; `enter` opens the
+highlighted plan, and `:files` (or `Esc`) returns to the overview from an open
+plan. `y` copies the raw response body (handy for grabbing JSON); `Y` copies the
+whole response pane as shown. Copy uses your platform clipboard tool (`pbcopy`,
+`clip`, or `wl-copy`/`xclip`/`xsel`).
 
 ## Writing `.http` files
 

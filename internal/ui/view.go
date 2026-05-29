@@ -96,11 +96,16 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, m.statusBar(), body, footer)
 }
 
-// noticeLine renders the transient diagnostic above the footer in the warning
-// colour, truncated so it never wraps and pushes the status bar off-screen.
+// noticeLine renders the transient diagnostic above the footer, truncated so it
+// never wraps and pushes the status bar off-screen. A confirmation (noticeOK,
+// e.g. a clipboard copy) reads green with a ✓; everything else is an amber ⚠.
 func (m Model) noticeLine() string {
-	return lipgloss.NewStyle().Foreground(palette.warning).
-		Render(truncate("⚠ "+m.notice, m.width))
+	glyph, colour := "⚠ ", palette.warning
+	if m.noticeOK {
+		glyph, colour = "✓ ", palette.success
+	}
+	return lipgloss.NewStyle().Foreground(colour).
+		Render(truncate(glyph+m.notice, m.width))
 }
 
 // renderEnvPicker draws the modal environment chooser: a titled, bordered box

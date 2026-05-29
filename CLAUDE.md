@@ -15,6 +15,7 @@ is `lazy-http` but the binary and module are `lazyhttp`).
 ```sh
 go build -o bin/lazyhttp .       # build (output is gitignored)
 ./bin/lazyhttp example.http      # open the TUI against the bundled example plan
+./bin/lazyhttp .                 # folder mode: browse every .http/.rest plan under a dir
 ./bin/lazyhttp run example.http  # run headlessly (CI); exit 0 pass / 1 fail / 2 usage
 go test ./...                    # all tests
 go test ./internal/httpfile/     # one package
@@ -41,7 +42,10 @@ The data flows in one direction: **parse → expand → execute → evaluate →
   HTTP request line / headers / body, or a shell script. `@var = value` definitions are
   harvested in a first pass so they resolve regardless of position. `http-client.env.json`
   next to the plan supplies named environments. `Vars.Expand` leaves unknown `{{vars}}`
-  untouched on purpose so the user can see what failed to resolve.
+  untouched on purpose so the user can see what failed to resolve. `discover.go` powers
+  folder mode: `DiscoverPlans(dir)` walks a tree for `.http`/`.rest` files (skipping dot-dirs,
+  `node_modules`, `vendor`) into a sorted `PlanIndex`; `CountSteps(path)` parses one file for
+  its step count (lazily, per visible row).
 
 - **`internal/exec`** — runs a single step. `Do(step, auth)` executes it synchronously and
   returns a `step.Result` (the UI-independent entry point); `Run` wraps `Do` as a `tea.Cmd`
@@ -63,7 +67,10 @@ The data flows in one direction: **parse → expand → execute → evaluate →
   the `include` predicate. `run.go` builds a UI-independent `runReport`, which `report.go`
   renders as `pretty` (TTY-coloured via `go-isatty`), `json`, or `junit` (`--output`/`-o`,
   `--quiet`). `internal/ui` constructs a `Plan` and delegates too, so capture/assert/reset
-  semantics live in exactly one place.
+  semantics live in exactly one place. `Unresolved(s)` reports any `{{var}}` still present in
+  an expanded HTTP step (excluding `$…` dynamic/auth tokens and `…response…` refs, which are
+  filled later); both the TUI and headless `Run` use it to fail a step with a clear
+  `UnresolvedError` instead of sending a literal-brace request.
 
 - **`internal/capture`** — evaluates capture/assert expressions against a `Result`:
   `status`, `body`, `header.Name`, or a JSON path (`json.a.b[0].c`, `$.a`, or bare `a.b`).
@@ -84,6 +91,24 @@ The data flows in one direction: **parse → expand → execute → evaluate →
   cursor, filter, run-from-here chain, and the rendering caches. The plan, not the model,
   is the source of truth for steps/results/vars. `view.go` renders the two-pane layout,
   `styles.go`/`json.go` handle theming and JSON highlighting, `keys.go` defines the keymap.
+  **Folder mode** adds two files: `browser.go` is the overview — a filterable, grouped list
+  of the discovered `PlanIndex` (its own `tea.Model`-shaped `Update`/`View`, reusing the step
+  list's navigation, `/` filter, and windowed scrolling) — and `app.go` is the root `App`
+  model that stacks the browser and a single open plan. `App` is used only when the CLI arg is
+  a directory (`main.go` stats it); a file argument still constructs `Model` directly. The
+  browser emits `openPlanMsg` on select; `App` opens the plan fresh via `ui.New`, and a k9s-
+  style `:` command bar (`:files`/`:plans`/`:ls`) or `Esc` returns to the overview. The
+  browser keeps its cursor/filter across trips, so going back is instant. Plan-only messages
+  (`spinner.TickMsg`, `exec.ResultMsg`) are forwarded to the plan even while the overview is
+  foreground, so an in-flight request still finishes. `App` also carries the selected
+  environment across opens (a plan's `E` picker writes back to `App.envName`), and sets
+  `keys.folderMode` on the opened plan so its help shows the `:files` hint. The `y`/`Y` keys
+  copy the response body / whole response pane (ANSI-stripped) to the clipboard, surfaced via
+  the green ✓ `notice` line.
+
+- **`internal/clipboard`** — `Copy(text)` writes to the system clipboard by shelling out to
+  the platform tool (`pbcopy`/`clip`/`wl-copy`/`xclip`/`xsel`); no third-party dependency.
+  `Available()` reports whether any tool is present.
 
 - **`internal/config`** — persists the chosen theme to the OS user-config dir
   (`lazy-http/config.json`); best-effort, never fatal.

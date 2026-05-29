@@ -21,8 +21,17 @@ type keyMap struct {
 	Filter   key.Binding
 	Theme    key.Binding
 	Env      key.Binding
+	Copy     key.Binding
+	CopyAll  key.Binding
+	Back     key.Binding
 	Help     key.Binding
 	Quit     key.Binding
+
+	// folderMode is set when the plan was opened from the folder overview; it
+	// surfaces the `:files` "back to overview" hint, which is meaningless when a
+	// single file was opened directly. The `:` command itself is handled by App,
+	// not this keymap — Back is documentation only.
+	folderMode bool
 }
 
 func newKeyMap() keyMap {
@@ -43,22 +52,35 @@ func newKeyMap() keyMap {
 		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		Theme:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 		Env:      key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "switch env")),
+		Copy:     key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy body")),
+		CopyAll:  key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy response pane")),
+		Back:     key.NewBinding(key.WithKeys(":"), key.WithHelp(":files", "overview")),
 		Help:     key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }
 
 // ShortHelp is the one-line footer hint set (satisfies help.KeyMap). It stays
-// deliberately lean so it fits a narrow terminal; the rest lives behind `?`.
+// deliberately lean so it fits a narrow terminal; the rest lives behind `?`. In
+// folder mode the `:files` back-to-overview hint is included.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Run, k.RunAll, k.Filter, k.Focus, k.Reload, k.Help, k.Quit}
+	hints := []key.Binding{k.Run, k.RunAll, k.Filter, k.Focus, k.Reload}
+	if k.folderMode {
+		hints = append(hints, k.Back)
+	}
+	return append(hints, k.Help, k.Quit)
 }
 
 // FullHelp is the expanded ? overlay, grouped into columns (satisfies help.KeyMap).
 func (k keyMap) FullHelp() [][]key.Binding {
+	last := []key.Binding{k.Request, k.Filter, k.Theme, k.Env, k.Copy, k.CopyAll}
+	if k.folderMode {
+		last = append(last, k.Back)
+	}
+	last = append(last, k.Focus, k.Help, k.Quit)
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfUp, k.HalfDn},
 		{k.Run, k.RunAll, k.Clear, k.ClearAll, k.Reload},
-		{k.Request, k.Filter, k.Theme, k.Env, k.Focus, k.Help, k.Quit},
+		last,
 	}
 }

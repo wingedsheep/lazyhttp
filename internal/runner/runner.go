@@ -7,8 +7,10 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/wingedsheep/lazyhttp/internal/auth"
@@ -17,6 +19,58 @@ import (
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
+
+// placeholderRe matches a {{token}} template, capturing the trimmed inner token.
+var placeholderRe = regexp.MustCompile(`\{\{\s*([^}]+?)\s*\}\}`)
+
+// Unresolved returns the distinct {{var}} placeholders still present in an
+// expanded step's executable fields (URL, headers, body) — variables that did
+// not resolve and would otherwise be sent literally (e.g. a URL of
+// "{{api}}/login", which fails with a bare "unsupported protocol scheme").
+//
+// Tokens filled by a later stage are deliberately excluded: anything starting
+// with "$" (dynamic variables and {{$auth.token(...)}}, which the auth resolver
+// substitutes inside exec) and inline response references ("name.response.…",
+// resolved once their source step has run). What remains is the set of plain
+// environment / @def variables that are genuinely missing, so a caller can fail
+// the step with a clear, accurate message.
+func Unresolved(s step.Step) []string {
+	seen := map[string]bool{}
+	var out []string
+	scan := func(in string) {
+		for _, m := range placeholderRe.FindAllStringSubmatch(in, -1) {
+			tok := m[1]
+			if strings.HasPrefix(tok, "$") || strings.Contains(tok, ".response.") {
+				continue
+			}
+			if !seen[tok] {
+				seen[tok] = true
+				out = append(out, tok)
+			}
+		}
+	}
+	scan(s.URL)
+	for _, v := range s.Headers {
+		scan(v)
+	}
+	scan(s.Body)
+	return out
+}
+
+// UnresolvedError formats the missing variables from Unresolved into a step
+// error. hint is appended after an em-dash when non-empty, letting a caller add
+// context it holds (e.g. the TUI's "press E to select an environment").
+func UnresolvedError(missing []string, hint string) error {
+	noun := "variable"
+	if len(missing) > 1 {
+		noun = "variables"
+	}
+	list := "{{" + strings.Join(missing, "}}, {{") + "}}"
+	if hint == "" {
+		return fmt.Errorf("unresolved %s %s", noun, list)
+	}
+	return fmt.Errorf("unresolved %s %s — %s", noun, list, hint)
+}
 
 // Plan is a parsed test plan together with the mutable state of running it. It
 // is the single source of truth for the variable lifecycle, shared by the TUI
@@ -98,6 +152,15 @@ func (p *Plan) Run(ctx context.Context, include func(i int) bool) ([]step.Result
 			// A body-file read failure fails the step like a transport error.
 			p.Results[i] = step.Result{Status: step.Failed, Err: err}
 			break
+		}
+		// A variable that never resolved would send a literal "{{var}}" — fail
+		// the step with a clear message rather than firing a broken request.
+		if s.Kind == step.KindHTTP {
+			if missing := Unresolved(s); len(missing) > 0 {
+				p.Results[i] = step.Result{Status: step.Failed,
+					Err: UnresolvedError(missing, "not defined in the selected environment or @vars")}
+				break
+			}
 		}
 		res := p.Evaluate(i, exec.Do(s, p.AuthResolver(s)))
 		p.Results[i] = res

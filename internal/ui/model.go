@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/wingedsheep/lazyhttp/internal/clipboard"
 	"github.com/wingedsheep/lazyhttp/internal/exec"
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
 	"github.com/wingedsheep/lazyhttp/internal/runner"
@@ -70,9 +71,12 @@ type Model struct {
 	envCursor  int
 
 	// notice is a transient one-line diagnostic shown above the footer — used to
-	// explain env discovery (empty list, parse error, an unresolved --env). It is
-	// recomputed on every (re)load and may be overwritten by a key action (E).
-	notice string
+	// explain env discovery (empty list, parse error, an unresolved --env) and to
+	// confirm a clipboard copy. It is recomputed on every (re)load and may be
+	// overwritten by a key action (E, y/Y). noticeOK flips it from a warning
+	// (⚠, amber) to a confirmation (✓, green) for success messages like a copy.
+	notice   string
+	noticeOK bool
 
 	// runFrom >= 0 means a "run from here" chain is active; it stops on the
 	// first failure or the end of the plan.
@@ -159,6 +163,7 @@ func (m *Model) load() {
 	m.envDisc = httpfile.DiscoverEnv(m.path)
 	m.envNames = m.envDisc.Names
 	m.notice = m.envNotice()
+	m.noticeOK = false // (re)load notices are diagnostics, not confirmations
 	p, err := runner.Load(m.path, m.envName)
 	if err != nil {
 		m.loadErr = err
@@ -222,6 +227,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case exec.ResultMsg:
 		return m.onResult(msg)
+
+	case copiedMsg:
+		return m.onCopied(msg)
 
 	case tea.MouseMsg:
 		return m.onMouse(msg)
@@ -359,10 +367,15 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.envPicking = true
 			m.envCursor = indexOf(m.envOptions(), m.envName)
 		} else {
-			m.notice = m.envDisc.Summary()
-			m.layout()
+			m.setNotice(m.envDisc.Summary(), false)
 		}
 		return m, nil
+
+	case key.Matches(msg, m.keys.Copy):
+		return m, m.copyResult(false)
+
+	case key.Matches(msg, m.keys.CopyAll):
+		return m, m.copyResult(true)
 	}
 
 	// When the result pane is focused, motion keys scroll the body instead.
@@ -522,6 +535,18 @@ func (m *Model) run(i int) tea.Cmd {
 			return exec.ResultMsg{Index: i, Result: step.Result{Status: step.Failed, Err: err}}
 		}
 	}
+	// A variable that never resolved would be sent literally (a URL like
+	// "{{api}}/login" fails with a bare "unsupported protocol scheme"). Fail the
+	// step with a clear, env-aware message instead — the most common cause is no
+	// environment selected, so point at E.
+	if s.Kind == step.KindHTTP {
+		if missing := runner.Unresolved(s); len(missing) > 0 {
+			err := runner.UnresolvedError(missing, m.unresolvedHint())
+			return func() tea.Msg {
+				return exec.ResultMsg{Index: i, Result: step.Result{Status: step.Failed, Err: err}}
+			}
+		}
+	}
 	m.plan.Results[i] = step.Result{Status: step.Running}
 	if i < len(m.bodyView) {
 		m.bodyView[i] = ""
@@ -544,6 +569,81 @@ func (m *Model) run(i int) tea.Cmd {
 	return cmd
 }
 
+// copiedMsg reports the outcome of a clipboard copy so onResult-style handling
+// can show a confirmation (or the failure) in the notice line.
+type copiedMsg struct {
+	label string // what was copied, e.g. "response body (1.2 KB)"
+	err   error
+}
+
+// copyResult copies the selected step's output to the system clipboard: the raw
+// response body when full is false (the common case — grab the JSON), or the
+// whole response pane (ANSI stripped) when full is true. It returns a command so
+// the clipboard tool runs off the UI thread. A step that hasn't run, or an empty
+// body, yields a notice instead of an empty copy.
+func (m Model) copyResult(full bool) tea.Cmd {
+	if m.cursor >= len(m.plan.Results) {
+		return nil
+	}
+	r := m.plan.Results[m.cursor]
+	if r.Status != step.Done && r.Status != step.Failed {
+		return func() tea.Msg { return copiedMsg{err: errNotRun} }
+	}
+
+	text, what := r.Body, "response body"
+	if full {
+		text, what = stripANSI(m.formatResult(m.cursor)), "response pane"
+	}
+	if text == "" {
+		return func() tea.Msg { return copiedMsg{err: errNothingToCopy} }
+	}
+	label := fmt.Sprintf("%s (%s)", what, humanBytes(len(text)))
+	return func() tea.Msg {
+		return copiedMsg{label: label, err: clipboard.Copy(text)}
+	}
+}
+
+// onCopied turns a finished copy into a notice — green confirmation on success,
+// amber warning on failure. The "nothing to copy" sentinels read as-is; only a
+// real clipboard-tool failure gets the "copy failed" prefix.
+func (m Model) onCopied(msg copiedMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.err == errNotRun || msg.err == errNothingToCopy:
+		m.setNotice(msg.err.Error(), false)
+	case msg.err != nil:
+		m.setNotice("copy failed: "+msg.err.Error(), false)
+	default:
+		m.setNotice("copied "+msg.label, true)
+	}
+	return m, nil
+}
+
+// setNotice sets the transient footer notice (ok = green confirmation, else
+// amber warning) and re-lays the panes, since the notice claims a footer row.
+func (m *Model) setNotice(text string, ok bool) {
+	m.notice = text
+	m.noticeOK = ok
+	m.layout()
+}
+
+// errNotRun / errNothingToCopy back the copy notices for steps with no output.
+var (
+	errNotRun        = fmt.Errorf("step not run — nothing to copy")
+	errNothingToCopy = fmt.Errorf("no output to copy")
+)
+
+// humanBytes renders a byte count as a compact size for the copy confirmation.
+func humanBytes(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
 // resetState returns the plan to a clean slate after a successful @reset step:
 // the engine clears the other results and drops captures back to baseline, then
 // the UI clears the matching cached bodies, rebuilds labels (which may reference
@@ -558,6 +658,36 @@ func (m *Model) resetState(keepIdx int) {
 	}
 	m.refreshLabels()
 	m.runFrom = -1
+}
+
+// unresolvedHint explains, in the user's current context, how to resolve a
+// missing {{var}}: pick an environment when none is selected (the usual cause),
+// note the var is absent from the chosen environment, or point at @defs /
+// http-client.env.json when no env file exists at all.
+func (m Model) unresolvedHint() string {
+	switch {
+	case m.envName == "" && len(m.envNames) > 0:
+		return "no environment selected; press E to choose one"
+	case m.envName != "":
+		return fmt.Sprintf("not defined in environment %q (press E to switch)", m.envName)
+	default:
+		return "not defined — add a @var or an http-client.env.json"
+	}
+}
+
+// capturingInput reports whether a sub-mode of the plan view currently owns the
+// keyboard (the filter editor or the env picker). The App checks this before
+// treating `:` as a command, so a colon typed into a filter stays literal.
+func (m Model) capturingInput() bool {
+	return m.filtering || m.envPicking
+}
+
+// escWouldConsume reports whether Esc has a job to do inside the plan view —
+// closing the env picker, leaving the filter editor, or clearing an applied
+// filter. The App checks this so that, in folder mode, an Esc the plan would
+// ignore instead pops back to the overview (one level up).
+func (m Model) escWouldConsume() bool {
+	return m.envPicking || m.filtering || m.filter != ""
 }
 
 // anyRunning reports whether at least one step is mid-flight.

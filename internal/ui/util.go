@@ -1,6 +1,19 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"regexp"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+// ansiPattern matches SGR colour escape sequences, stripped when copying the
+// response pane to the clipboard so the user gets clean text, not terminal codes.
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// stripANSI removes colour escapes from s.
+func stripANSI(s string) string {
+	return ansiPattern.ReplaceAllString(s, "")
+}
 
 // clamp constrains v to the inclusive range [lo, hi].
 func clamp(v, lo, hi int) int {
