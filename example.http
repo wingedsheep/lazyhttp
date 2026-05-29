@@ -137,13 +137,13 @@ DELETE {{api}}/products/{{id}}
 # @assert json.method == POST
 # @assert json.args.team == lazy
 # @assert json.headers.X-Demo == lazyhttp
-# @assert json.headers.X-Request-Id exists
+# @assert json.headers.X-Correlation-Id exists
 # @assert json.json.ping == pong
 # @assert json.json.nonce exists
 POST {{bin}}/anything?team=lazy
 Content-Type: application/json
 X-Demo: lazyhttp
-X-Request-Id: {{$uuid}}
+X-Correlation-Id: {{$uuid}}
 
 {
   "ping": "pong",
