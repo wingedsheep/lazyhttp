@@ -419,7 +419,7 @@ func (m Model) formatResult(i int) string {
 				b.WriteString(m.styles.dim.Render(k+": "+v) + "\n")
 			}
 			if s.Body != "" {
-				b.WriteString("\n" + highlightJSON(s.Body) + "\n")
+				b.WriteString("\n" + highlightJSON(s.Body, jsonTheme) + "\n")
 			}
 		}
 		b.WriteString(m.styles.dim.Render(strings.Repeat("─", min(m.viewport.Width, 40))) + "\n")
@@ -484,7 +484,7 @@ func (m Model) cachedBody(i int, r step.Result) string {
 	if i < len(m.bodyView) && m.bodyView[i] != "" {
 		return m.bodyView[i]
 	}
-	return highlightJSON(r.Body)
+	return highlightJSON(r.Body, jsonTheme)
 }
 
 // assertSummary is the aggregate pass/fail badge shown in the status bar. It is

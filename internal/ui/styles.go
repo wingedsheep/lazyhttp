@@ -88,15 +88,11 @@ var activeTheme int
 var palette = themes[0].palette
 
 // applyTheme makes themes[i] (wrapping out-of-range indices) the active palette
-// and rebuilds the package-level JSON highlight styles derived from it.
+// and rebuilds the JSON highlight styles derived from it.
 func applyTheme(i int) {
 	activeTheme = ((i % len(themes)) + len(themes)) % len(themes)
 	palette = themes[activeTheme].palette
-	jsonKey = lipgloss.NewStyle().Foreground(palette.blue)
-	jsonStr = lipgloss.NewStyle().Foreground(palette.success)
-	jsonNum = lipgloss.NewStyle().Foreground(palette.warning)
-	jsonLit = lipgloss.NewStyle().Foreground(palette.teal)
-	jsonPunct = lipgloss.NewStyle().Foreground(palette.subtle)
+	jsonTheme = newJSONStyles()
 }
 
 // ActiveThemeName returns the name of the live theme, so callers can persist

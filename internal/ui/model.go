@@ -126,7 +126,7 @@ func (m *Model) cycleTheme() {
 	m.applyStyles()
 	for i := range m.results {
 		if i < len(m.bodyView) && m.bodyView[i] != "" {
-			m.bodyView[i] = highlightJSON(m.results[i].Body)
+			m.bodyView[i] = highlightJSON(m.results[i].Body, jsonTheme)
 		}
 	}
 	m.refreshResult()
@@ -221,7 +221,8 @@ func (m Model) onResult(msg exec.ResultMsg) (tea.Model, tea.Cmd) {
 		r := m.evaluate(msg.Index, msg.Result)
 		m.results[msg.Index] = r
 		if msg.Index < len(m.bodyView) {
-			m.bodyView[msg.Index] = highlightJSON(r.Body)
+			// Highlighting was done off the UI thread inside the exec command.
+			m.bodyView[msg.Index] = msg.Highlighted
 		}
 		// Captures from this response may feed later step names; re-expand them.
 		m.refreshLabels()
@@ -454,7 +455,12 @@ func (m *Model) run(i int) tea.Cmd {
 	if i == m.cursor {
 		m.refreshResult()
 	}
-	cmd := exec.Run(i, m.expand(m.steps[i]))
+	// Snapshot the highlight palette on the UI thread so the off-thread
+	// highlighter can't race a theme switch that rebuilds jsonTheme.
+	st := jsonTheme
+	cmd := exec.Run(i, m.expand(m.steps[i]), func(body string) string {
+		return highlightJSON(body, st)
+	})
 	// Wake the spinner only if it isn't already animating, so a run-from-here
 	// chain doesn't stack duplicate tick loops.
 	if !m.spinning {

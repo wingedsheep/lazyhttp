@@ -18,7 +18,7 @@ func TestRunHTTP(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cmd := Run(0, step.Step{Kind: step.KindHTTP, Method: "POST", URL: srv.URL, Body: "{}"})
+	cmd := Run(0, step.Step{Kind: step.KindHTTP, Method: "POST", URL: srv.URL, Body: "{}"}, nil)
 	msg, ok := cmd().(ResultMsg)
 	if !ok {
 		t.Fatalf("expected ResultMsg, got %T", cmd())
@@ -37,7 +37,7 @@ func TestRunHTTP(t *testing.T) {
 
 // TestRunShell exercises the shell runner and exit-code capture.
 func TestRunShell(t *testing.T) {
-	cmd := Run(1, step.Step{Kind: step.KindShell, Body: "echo hello && exit 3"})
+	cmd := Run(1, step.Step{Kind: step.KindShell, Body: "echo hello && exit 3"}, nil)
 	msg := cmd().(ResultMsg)
 	if msg.Result.ExitCode != 3 {
 		t.Errorf("exit code: want 3, got %d", msg.Result.ExitCode)

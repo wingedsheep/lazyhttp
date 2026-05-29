@@ -43,7 +43,7 @@ func runShell(index int, s step.Step) tea.Cmd {
 				res.Err = err // spawn failure, not just a non-zero exit
 			}
 		}
-		return ResultMsg{index, res}
+		return ResultMsg{Index: index, Result: res}
 	}
 }
 

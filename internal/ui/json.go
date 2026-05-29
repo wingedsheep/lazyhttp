@@ -6,19 +6,38 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// JSON highlight styles (Catppuccin: blue keys, green strings, peach numbers,
-// teal literals, dim punctuation).
-var (
-	jsonKey   = lipgloss.NewStyle().Foreground(palette.blue)
-	jsonStr   = lipgloss.NewStyle().Foreground(palette.success)
-	jsonNum   = lipgloss.NewStyle().Foreground(palette.warning)
-	jsonLit   = lipgloss.NewStyle().Foreground(palette.teal) // true/false/null
-	jsonPunct = lipgloss.NewStyle().Foreground(palette.subtle)
-)
+// jsonStyles is the palette highlightJSON paints with (Catppuccin: blue keys,
+// green strings, peach numbers, teal literals, dim punctuation). It is grouped
+// and passed by value so a highlight running off the UI thread can take a
+// snapshot of the live theme and never race a theme switch that rebuilds it.
+type jsonStyles struct {
+	key   lipgloss.Style // object keys
+	str   lipgloss.Style // string values
+	num   lipgloss.Style // numbers
+	lit   lipgloss.Style // true/false/null
+	punct lipgloss.Style // structural punctuation
+}
 
-// highlightJSON colourizes a (pretty-printed) JSON document. If s doesn't look
-// like JSON it's returned unchanged, so non-JSON bodies pass through untouched.
-func highlightJSON(s string) string {
+// newJSONStyles builds the highlight palette from the active theme.
+func newJSONStyles() jsonStyles {
+	return jsonStyles{
+		key:   lipgloss.NewStyle().Foreground(palette.blue),
+		str:   lipgloss.NewStyle().Foreground(palette.success),
+		num:   lipgloss.NewStyle().Foreground(palette.warning),
+		lit:   lipgloss.NewStyle().Foreground(palette.teal),
+		punct: lipgloss.NewStyle().Foreground(palette.subtle),
+	}
+}
+
+// jsonTheme is the live highlight palette, rebuilt by applyTheme on a theme
+// switch. Read it only on the UI thread; off-thread callers (see Model.run)
+// must snapshot it into a local first.
+var jsonTheme = newJSONStyles()
+
+// highlightJSON colourizes a (pretty-printed) JSON document with st. If s
+// doesn't look like JSON it's returned unchanged, so non-JSON bodies (e.g. shell
+// output) pass through untouched.
+func highlightJSON(s string, st jsonStyles) string {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') {
 		return s
@@ -32,26 +51,26 @@ func highlightJSON(s string) string {
 			tok, n := scanString(runes[i:])
 			// A string acting as an object key is followed by a ':'.
 			if isKey(runes, i+n) {
-				b.WriteString(jsonKey.Render(tok))
+				b.WriteString(st.key.Render(tok))
 			} else {
-				b.WriteString(jsonStr.Render(tok))
+				b.WriteString(st.str.Render(tok))
 			}
 			i += n
 		case c == '-' || (c >= '0' && c <= '9'):
 			tok, n := scanNumber(runes[i:])
-			b.WriteString(jsonNum.Render(tok))
+			b.WriteString(st.num.Render(tok))
 			i += n
-		case strings.HasPrefix(string(runes[i:]), "true"):
-			b.WriteString(jsonLit.Render("true"))
+		case hasRunePrefix(runes, i, "true"):
+			b.WriteString(st.lit.Render("true"))
 			i += 4
-		case strings.HasPrefix(string(runes[i:]), "false"):
-			b.WriteString(jsonLit.Render("false"))
+		case hasRunePrefix(runes, i, "false"):
+			b.WriteString(st.lit.Render("false"))
 			i += 5
-		case strings.HasPrefix(string(runes[i:]), "null"):
-			b.WriteString(jsonLit.Render("null"))
+		case hasRunePrefix(runes, i, "null"):
+			b.WriteString(st.lit.Render("null"))
 			i += 4
 		case strings.ContainsRune("{}[],:", c):
-			b.WriteString(jsonPunct.Render(string(c)))
+			b.WriteString(st.punct.Render(string(c)))
 			i++
 		default:
 			b.WriteRune(c) // whitespace and anything else
@@ -85,6 +104,19 @@ func scanNumber(runes []rune) (string, int) {
 		i++
 	}
 	return string(runes[:i]), i
+}
+
+// hasRunePrefix reports whether word appears at runes[idx:] without allocating.
+// (string(runes[idx:]) would copy the entire remaining document on every call,
+// turning the highlighter quadratic on large bodies.)
+func hasRunePrefix(runes []rune, idx int, word string) bool {
+	for _, w := range word {
+		if idx >= len(runes) || runes[idx] != w {
+			return false
+		}
+		idx++
+	}
+	return true
 }
 
 // isKey reports whether the next non-space rune at or after idx is a colon.

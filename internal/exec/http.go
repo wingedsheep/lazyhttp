@@ -19,7 +19,7 @@ func runHTTP(index int, s step.Step) tea.Cmd {
 	return func() tea.Msg {
 		start := time.Now()
 		fail := func(err error) tea.Msg {
-			return ResultMsg{index, step.Result{
+			return ResultMsg{Index: index, Result: step.Result{
 				Status:   step.Failed,
 				Err:      err,
 				Duration: time.Since(start),
@@ -49,7 +49,7 @@ func runHTTP(index int, s step.Step) tea.Cmd {
 			return fail(err)
 		}
 
-		return ResultMsg{index, step.Result{
+		return ResultMsg{Index: index, Result: step.Result{
 			Status:     step.Done,
 			StatusCode: resp.StatusCode,
 			Header:     resp.Header,
