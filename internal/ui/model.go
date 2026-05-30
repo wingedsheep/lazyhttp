@@ -5,13 +5,11 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/wingedsheep/lazyhttp/internal/clipboard"
 	"github.com/wingedsheep/lazyhttp/internal/exec"
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
 	"github.com/wingedsheep/lazyhttp/internal/runner"
@@ -27,6 +25,11 @@ const (
 
 // Model is the root Bubble Tea model: it drives a runner.Plan (the parsed steps,
 // per-step results, and the variable lifecycle) and the widgets that render it.
+//
+// Its behaviour is split across a few files in this package: input.go owns the
+// keyboard/mouse routing and cursor math, env.go the environment picker, copy.go
+// the clipboard copy and the shared notice line. This file holds the struct, the
+// load/run/result lifecycle, and the small caches the renderer reads.
 type Model struct {
 	path    string
 	envName string
@@ -117,10 +120,6 @@ type Model struct {
 	wheelAccum int
 }
 
-// wheelStep is how many wheel events make up one cursor step. Most terminals
-// fire ~3 events per notch, so this maps roughly one notch to one step.
-const wheelStep = 3
-
 // New builds a Model by loading and parsing the plan at path with the named
 // environment (envName may be "").
 func New(path, envName string) Model {
@@ -208,25 +207,6 @@ func (m *Model) load() {
 	m.layout()
 }
 
-// envNotice builds the load-time diagnostic for the env line: a parse error
-// (worth surfacing whether or not an env was requested), or a requested --env
-// that isn't available — naming the alternatives, or explaining where discovery
-// looked when none turned up. It returns "" when there's nothing to report.
-func (m Model) envNotice() string {
-	if m.envDisc.Err != nil {
-		return m.envDisc.Summary()
-	}
-	if m.envName == "" || contains(m.envNames, m.envName) {
-		return "" // no env requested, or the requested one resolved
-	}
-	if len(m.envNames) == 0 {
-		// Nothing to fall back to — name the requested env, then say why discovery
-		// came up empty (search path, or a parse error).
-		return fmt.Sprintf("env %q unavailable: %s", m.envName, m.envDisc.Summary())
-	}
-	return fmt.Sprintf("env %q not found — available: %s", m.envName, strings.Join(m.envNames, ", "))
-}
-
 // Init starts idle: the spinner only ticks once a step is running (see run),
 // so an untouched UI performs zero redraws.
 func (m Model) Init() tea.Cmd {
@@ -280,60 +260,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.onKey(msg)
-	}
-	return m, nil
-}
-
-// onMouse routes mouse input. A left click selects the pane under the cursor
-// and, on a step row in the list, runs that step. The scroll wheel scrolls the
-// response body when that pane is focused, otherwise it moves through the list.
-func (m Model) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-		if m.envPicking || m.filtering {
-			return m, nil // a modal owns the screen; ignore stray clicks
-		}
-		// The list pane occupies the leftmost listW+4 columns (content + padding +
-		// border); anything to the right is the result pane.
-		if msg.X >= m.listW+4 {
-			m.focus = focusResult
-			return m, nil
-		}
-		m.focus = focusList
-		if i, ok := m.stepAtRow(msg.Y); ok {
-			m.setCursor(i)
-			return m, m.run(i)
-		}
-		return m, nil
-	}
-
-	if m.focus == focusResult {
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
-	}
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		if m.wheelAccum > 0 {
-			m.wheelAccum = 0 // direction flipped; drop leftover from the other way
-		}
-		m.wheelAccum--
-	case tea.MouseButtonWheelDown:
-		if m.wheelAccum < 0 {
-			m.wheelAccum = 0
-		}
-		m.wheelAccum++
-	default:
-		return m, nil
-	}
-	// Only step once a full notch's worth of events has accumulated, so a
-	// single physical scroll tick moves the cursor by one.
-	for m.wheelAccum <= -wheelStep {
-		m.moveCursor(-1)
-		m.wheelAccum += wheelStep
-	}
-	for m.wheelAccum >= wheelStep {
-		m.moveCursor(1)
-		m.wheelAccum -= wheelStep
 	}
 	return m, nil
 }
@@ -423,236 +349,6 @@ func (m *Model) cancelStream() {
 	m.streamIndex = -1
 }
 
-func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// While the env picker is open it owns the keyboard until a choice is made
-	// or it's dismissed, so every other binding is bypassed.
-	if m.envPicking {
-		return m.envKey(msg)
-	}
-
-	// While the filter is being typed, keystrokes edit the query (except a few
-	// that navigate or dismiss it), so list/run bindings are bypassed.
-	if m.filtering {
-		return m.filterKey(msg)
-	}
-
-	switch {
-	case key.Matches(msg, m.keys.Quit):
-		return m, tea.Quit
-
-	// Esc clears an applied filter when one is active.
-	case msg.Type == tea.KeyEsc:
-		if m.filter != "" {
-			m.filter = ""
-			m.snapCursor()
-			m.refreshResult()
-		}
-		return m, nil
-
-	case key.Matches(msg, m.keys.Help):
-		m.help.ShowAll = !m.help.ShowAll
-		m.layout()
-		m.refreshResult()
-		return m, nil
-
-	case key.Matches(msg, m.keys.Focus):
-		m.toggleFocus()
-		return m, nil
-
-	case key.Matches(msg, m.keys.Left):
-		m.focus = focusList
-		return m, nil
-
-	case key.Matches(msg, m.keys.Right):
-		m.focus = focusResult
-		return m, nil
-
-	case key.Matches(msg, m.keys.Reload):
-		m.load()
-		m.refreshResult()
-		return m, nil
-
-	case key.Matches(msg, m.keys.Request):
-		m.showRequest = !m.showRequest
-		m.keys.requestOn = m.showRequest
-		m.refreshResult()
-		return m, nil
-
-	case key.Matches(msg, m.keys.Headers):
-		m.showHeaders = !m.showHeaders
-		m.keys.headersOn = m.showHeaders
-		m.refreshResult()
-		return m, nil
-
-	case key.Matches(msg, m.keys.Theme):
-		m.cycleTheme()
-		return m, nil
-
-	case key.Matches(msg, m.keys.Env):
-		// Open the picker when there's something to choose from; with no env file
-		// explain why (where we searched, or the parse error) instead of no-op'ing.
-		if len(m.envNames) > 0 {
-			m.envPicking = true
-			m.envCursor = indexOf(m.envOptions(), m.envName)
-		} else {
-			m.setNotice(m.envDisc.Summary(), false)
-		}
-		return m, nil
-
-	case key.Matches(msg, m.keys.Copy):
-		return m, m.copyResult(false)
-
-	case key.Matches(msg, m.keys.CopyAll):
-		return m, m.copyResult(true)
-	}
-
-	// When the result pane is focused, motion keys scroll the body instead.
-	if m.focus == focusResult {
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
-	}
-	return m.listKey(msg)
-}
-
-// listKey handles navigation and execution while the step list is focused.
-func (m Model) listKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, m.keys.Up):
-		m.moveCursor(-1)
-	case key.Matches(msg, m.keys.Down):
-		m.moveCursor(1)
-	case key.Matches(msg, m.keys.HalfUp):
-		m.moveCursor(-m.pageStep())
-	case key.Matches(msg, m.keys.HalfDn):
-		m.moveCursor(m.pageStep())
-	case key.Matches(msg, m.keys.Top):
-		m.setTop()
-	case key.Matches(msg, m.keys.Bottom):
-		m.setBottom()
-	case key.Matches(msg, m.keys.Clear):
-		if m.cursor < len(m.plan.Results) {
-			// Clearing a still-streaming step doubles as "stop": cancel the
-			// request so the cleared result isn't resurrected by late chunks.
-			if m.plan.Results[m.cursor].Status == step.Running {
-				m.cancelStream()
-			}
-			m.plan.Results[m.cursor] = step.Result{}
-			if m.cursor < len(m.bodyView) {
-				m.bodyView[m.cursor] = ""
-			}
-			m.refreshResult()
-		}
-	case key.Matches(msg, m.keys.ClearAll):
-		m.resetState(-1)
-		m.refreshResult()
-	case key.Matches(msg, m.keys.Filter):
-		m.filtering = true
-		return m, nil
-	case key.Matches(msg, m.keys.Run):
-		return m, m.run(m.cursor)
-	case key.Matches(msg, m.keys.RunAll):
-		m.runFrom = m.cursor
-		return m, m.run(m.cursor)
-	}
-	return m, nil
-}
-
-// filterKey edits the live filter query: most keys append/erase characters,
-// while Esc clears it, Enter applies it, and the arrows still move the cursor
-// through the matches so you can type-then-pick in one motion.
-func (m Model) filterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC:
-		return m, tea.Quit
-	case tea.KeyEsc:
-		m.filtering = false
-		m.filter = ""
-		m.snapCursor()
-		m.refreshResult()
-		return m, nil
-	case tea.KeyEnter:
-		m.filtering = false // keep the query; just leave edit mode
-		return m, nil
-	case tea.KeyUp:
-		m.moveCursor(-1)
-		return m, nil
-	case tea.KeyDown:
-		m.moveCursor(1)
-		return m, nil
-	case tea.KeyBackspace:
-		if r := []rune(m.filter); len(r) > 0 {
-			m.filter = string(r[:len(r)-1])
-		}
-	case tea.KeySpace:
-		m.filter += " "
-	case tea.KeyRunes:
-		m.filter += string(msg.Runes)
-	default:
-		return m, nil
-	}
-	m.snapCursor()
-	m.refreshResult()
-	return m, nil
-}
-
-// envKey drives the environment picker: the motion keys move the highlight,
-// Enter switches to the chosen environment (reloading the plan against its
-// variables), and Esc dismisses it without changing anything.
-func (m Model) envKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	opts := m.envOptions()
-	switch {
-	case msg.Type == tea.KeyCtrlC:
-		return m, tea.Quit
-	case msg.Type == tea.KeyEsc:
-		m.envPicking = false
-		return m, nil
-	case key.Matches(msg, m.keys.Up):
-		m.envCursor = clamp(m.envCursor-1, 0, len(opts)-1)
-	case key.Matches(msg, m.keys.Down):
-		m.envCursor = clamp(m.envCursor+1, 0, len(opts)-1)
-	case key.Matches(msg, m.keys.Run):
-		m.envPicking = false
-		if name := opts[m.envCursor]; name != m.envName {
-			// New environment → new variable set, so reload from scratch. This
-			// drops captured values and prior results, which would be stale
-			// against the new env anyway.
-			m.envName = name
-			m.load()
-			m.refreshResult()
-		}
-	}
-	return m, nil
-}
-
-// envOptions is the picker's selectable list: an explicit "no environment"
-// entry (the empty string, rendered as "(none)") followed by every declared
-// environment, so the user can fall back to inline-only variables.
-func (m Model) envOptions() []string {
-	return append([]string{""}, m.envNames...)
-}
-
-// contains reports whether s is one of names.
-func contains(names []string, s string) bool {
-	for _, n := range names {
-		if n == s {
-			return true
-		}
-	}
-	return false
-}
-
-// indexOf returns the position of s in names, or 0 when it isn't present so the
-// picker opens on a sensible default.
-func indexOf(names []string, s string) int {
-	for i, n := range names {
-		if n == s {
-			return i
-		}
-	}
-	return 0
-}
-
 // run marks a step running and returns the command that executes it, with all
 // {{vars}} expanded against the current variable set (including captures).
 func (m *Model) run(i int) tea.Cmd {
@@ -735,81 +431,6 @@ func (m *Model) run(i int) tea.Cmd {
 	return cmd
 }
 
-// copiedMsg reports the outcome of a clipboard copy so onResult-style handling
-// can show a confirmation (or the failure) in the notice line.
-type copiedMsg struct {
-	label string // what was copied, e.g. "response body (1.2 KB)"
-	err   error
-}
-
-// copyResult copies the selected step's output to the system clipboard: the raw
-// response body when full is false (the common case — grab the JSON), or the
-// whole response pane (ANSI stripped) when full is true. It returns a command so
-// the clipboard tool runs off the UI thread. A step that hasn't run, or an empty
-// body, yields a notice instead of an empty copy.
-func (m Model) copyResult(full bool) tea.Cmd {
-	if m.cursor >= len(m.plan.Results) {
-		return nil
-	}
-	r := m.plan.Results[m.cursor]
-	if r.Status != step.Done && r.Status != step.Failed {
-		return func() tea.Msg { return copiedMsg{err: errNotRun} }
-	}
-
-	text, what := r.Body, "response body"
-	if full {
-		text, what = stripANSI(m.formatResult(m.cursor)), "response pane"
-	}
-	if text == "" {
-		return func() tea.Msg { return copiedMsg{err: errNothingToCopy} }
-	}
-	label := fmt.Sprintf("%s (%s)", what, humanBytes(len(text)))
-	return func() tea.Msg {
-		return copiedMsg{label: label, err: clipboard.Copy(text)}
-	}
-}
-
-// onCopied turns a finished copy into a notice — green confirmation on success,
-// amber warning on failure. The "nothing to copy" sentinels read as-is; only a
-// real clipboard-tool failure gets the "copy failed" prefix.
-func (m Model) onCopied(msg copiedMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case msg.err == errNotRun || msg.err == errNothingToCopy:
-		m.setNotice(msg.err.Error(), false)
-	case msg.err != nil:
-		m.setNotice("copy failed: "+msg.err.Error(), false)
-	default:
-		m.setNotice("copied "+msg.label, true)
-	}
-	return m, nil
-}
-
-// setNotice sets the transient footer notice (ok = green confirmation, else
-// amber warning) and re-lays the panes, since the notice claims a footer row.
-func (m *Model) setNotice(text string, ok bool) {
-	m.notice = text
-	m.noticeOK = ok
-	m.layout()
-}
-
-// errNotRun / errNothingToCopy back the copy notices for steps with no output.
-var (
-	errNotRun        = fmt.Errorf("step not run — nothing to copy")
-	errNothingToCopy = fmt.Errorf("no output to copy")
-)
-
-// humanBytes renders a byte count as a compact size for the copy confirmation.
-func humanBytes(n int) string {
-	switch {
-	case n >= 1<<20:
-		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
-	case n >= 1<<10:
-		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
-	default:
-		return fmt.Sprintf("%d B", n)
-	}
-}
-
 // resetState returns the plan to a clean slate after a successful @reset step:
 // the engine clears the other results and drops captures back to baseline, then
 // the UI clears the matching cached bodies, rebuilds labels (which may reference
@@ -884,88 +505,4 @@ func (m *Model) refreshLabels() {
 		}
 		m.names[i] = name
 	}
-}
-
-// moveCursor steps delta positions through the currently visible (filtered)
-// steps, so navigation skips anything the filter has hidden.
-func (m *Model) moveCursor(delta int) {
-	vis := m.visible()
-	if len(vis) == 0 {
-		return
-	}
-	pos := 0
-	for i, idx := range vis {
-		if idx == m.cursor {
-			pos = i
-			break
-		}
-	}
-	m.setCursor(vis[clamp(pos+delta, 0, len(vis)-1)])
-}
-
-// setTop / setBottom jump to the first / last visible step.
-func (m *Model) setTop() {
-	if vis := m.visible(); len(vis) > 0 {
-		m.setCursor(vis[0])
-	}
-}
-
-func (m *Model) setBottom() {
-	if vis := m.visible(); len(vis) > 0 {
-		m.setCursor(vis[len(vis)-1])
-	}
-}
-
-func (m *Model) setCursor(i int) {
-	if len(m.plan.Steps) == 0 {
-		return
-	}
-	m.cursor = min(max(i, 0), len(m.plan.Steps)-1)
-	m.refreshResult()
-}
-
-// visible returns the absolute indices of steps that pass the active filter, in
-// order. With no filter every step is visible.
-func (m Model) visible() []int {
-	out := make([]int, 0, len(m.plan.Steps))
-	q := strings.ToLower(m.filter)
-	for i, s := range m.plan.Steps {
-		if q == "" {
-			out = append(out, i)
-			continue
-		}
-		hay := strings.ToLower(s.Method + " " + m.names[i] + " " + s.Group)
-		if strings.Contains(hay, q) {
-			out = append(out, i)
-		}
-	}
-	return out
-}
-
-// snapCursor keeps the cursor on a visible step after the filter changes,
-// jumping to the first match when the current step has been hidden.
-func (m *Model) snapCursor() {
-	vis := m.visible()
-	if len(vis) == 0 {
-		return
-	}
-	for _, idx := range vis {
-		if idx == m.cursor {
-			return
-		}
-	}
-	m.cursor = vis[0]
-}
-
-func (m *Model) toggleFocus() {
-	if m.focus == focusList {
-		m.focus = focusResult
-	} else {
-		m.focus = focusList
-	}
-}
-
-// pageStep is the half-page jump distance for ctrl+d / ctrl+u.
-func (m Model) pageStep() int {
-	return max(1, (m.height-6)/2)
 }
