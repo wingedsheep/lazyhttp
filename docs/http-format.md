@@ -413,9 +413,10 @@ GET {{api}}/reports/export
 ```
 
 - **`# @timeout <n> <unit>`** replaces the shared 30-second client timeout for
-  this request. Units are `ms`, `s`, and `m`; a bare number (`# @timeout 45`) is
-  read as seconds. The combined form (`# @timeout 500ms`) works too. A
-  zero/negative value or an unknown unit is ignored, leaving the 30s default.
+  this request. Units are `ms`, `s`, `m`, and `h`; a bare number (`# @timeout 45`)
+  is read as seconds. The combined form works too, including fractional and
+  compound durations (`# @timeout 500ms`, `# @timeout 1.5s`, `# @timeout 1h30m`).
+  A zero/negative value or an unknown unit is ignored, leaving the 30s default.
 - **`# @no-redirect`** stops the client following `3xx` `Location` headers, so the
   redirect response itself is returned — handy for asserting on the redirect
   (`# @assert status == 302`, `# @assert header.Location matches ^/orders/\d+$`).

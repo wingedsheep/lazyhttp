@@ -98,6 +98,13 @@ type Plan struct {
 	AuthConfigs map[string]auth.Config
 	AuthCache   *auth.Cache
 
+	// OnStepStart, when set, is called with a step's index just before it is
+	// dispatched in Run — only for steps the run actually executes (included, and
+	// not skipped by an earlier failure). A headless caller uses it to stream
+	// progress for a long plan; the TUI, which dispatches steps itself, leaves it
+	// nil. It must not block: Run calls it inline on the run goroutine.
+	OnStepStart func(i int)
+
 	// bodyFileCache memoizes `< file` / `<@ file` body reads keyed by absolute
 	// path. Expand runs on every preview, and the TUI re-expands the selected
 	// step on each cursor arrival, so a large body file would otherwise be
@@ -169,6 +176,9 @@ func (p *Plan) Run(ctx context.Context, include func(i int) bool) ([]step.Result
 		}
 		if include != nil && !include(i) {
 			continue
+		}
+		if p.OnStepStart != nil {
+			p.OnStepStart(i)
 		}
 		s, err := p.Expand(p.Steps[i])
 		if err != nil {

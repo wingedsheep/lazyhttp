@@ -238,10 +238,14 @@ func TestParseTimeout(t *testing.T) {
 		{"500 ms", 500 * time.Millisecond},
 		{"2 m", 2 * time.Minute},
 		{"30s", 30 * time.Second},
-		{"15", 15 * time.Second}, // bare number defaults to seconds
-		{"abc", 0},
-		{"5 h", 0}, // unsupported unit
-		{"0 s", 0}, // non-positive ignored
+		{"15", 15 * time.Second},          // bare number defaults to seconds
+		{"1.5s", 1500 * time.Millisecond}, // fractional, via time.ParseDuration
+		{"1h", time.Hour},                 // hours now supported
+		{"5 h", 5 * time.Hour},            // space-separated hours too
+		{"1h30m", 90 * time.Minute},       // compound duration
+		{"abc", 0},                        // unparseable
+		{"0 s", 0},                        // non-positive ignored
+		{"-5s", 0},                        // negative ignored
 		{"", 0},
 	}
 	for _, tc := range cases {

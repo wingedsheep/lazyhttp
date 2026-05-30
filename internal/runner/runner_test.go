@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -381,5 +382,34 @@ func TestRunFiltered(t *testing.T) {
 	}
 	if p.Results[2].Status != step.Done {
 		t.Error("step 2 was selected and should have run")
+	}
+}
+
+// TestOnStepStartFires verifies the progress hook is invoked once per executed
+// step, in order, and skips filtered-out steps.
+func TestOnStepStartFires(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var started []int
+	p := &Plan{
+		Vars: httpfile.Vars{"host": srv.URL},
+		Steps: []step.Step{
+			{Name: "alpha", Kind: step.KindHTTP, Method: "GET", URL: "{{host}}/a"},
+			{Name: "beta", Kind: step.KindHTTP, Method: "GET", URL: "{{host}}/b"},
+			{Name: "gamma", Kind: step.KindHTTP, Method: "GET", URL: "{{host}}/c"},
+		},
+		Results:     make([]step.Result, 3),
+		OnStepStart: func(i int) { started = append(started, i) },
+	}
+
+	include := func(i int) bool { return i != 1 } // skip beta
+	if _, err := p.Run(context.Background(), include); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if want := []int{0, 2}; !reflect.DeepEqual(started, want) {
+		t.Errorf("OnStepStart fired for %v, want %v (only executed steps, in order)", started, want)
 	}
 }

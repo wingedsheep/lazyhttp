@@ -164,6 +164,32 @@ func TestLoadEnvPrivateOverlay(t *testing.T) {
 	}
 }
 
+// TestLoadEnvScalarValues verifies non-string scalars are coerced to strings so
+// they fill {{vars}} (a numeric port, an integer, a boolean), while composite
+// values — the Security object — are skipped rather than leaking into the set.
+func TestLoadEnvScalarValues(t *testing.T) {
+	dir := t.TempDir()
+	env := `{"dev": {
+		"host": "https://api.dev",
+		"port": 8080,
+		"ratio": 1.5,
+		"debug": true,
+		"Security": {"Auth": {}}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, "http-client.env.json"), []byte(env), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadEnv(filepath.Join(dir, "plan.http"), "dev")
+	if err != nil {
+		t.Fatalf("LoadEnv: %v", err)
+	}
+	want := Vars{"host": "https://api.dev", "port": "8080", "ratio": "1.5", "debug": "true"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("LoadEnv = %v, want %v (Security must be skipped, scalars coerced)", got, want)
+	}
+}
+
 // TestLoadEnvPrivateSecretWithSharedAuth verifies the canonical split: the
 // Security.Auth block lives in the shared file referencing {{clientSecret}}, the
 // secret itself lives in the private file. LoadAuth still finds the Security
