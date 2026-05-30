@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -223,7 +224,7 @@ func TestUnknownConfig(t *testing.T) {
 }
 
 func TestUnsupportedGrant(t *testing.T) {
-	r := NewResolver(map[string]Config{"api": {GrantType: "Authorization Code", TokenURL: "http://x"}}, NewCache())
+	r := NewResolver(map[string]Config{"api": {GrantType: "Implicit", TokenURL: "http://x"}}, NewCache())
 	s := &step.Step{Headers: map[string]string{"A": `{{$auth.token("api")}}`}}
 	if err := r.Resolve(s); err == nil {
 		t.Error("expected an error for an unsupported grant type")
@@ -243,6 +244,216 @@ func TestTokenEndpointError(t *testing.T) {
 	err := r.Resolve(s)
 	if err == nil || !strings.Contains(err.Error(), "bad secret") {
 		t.Errorf("expected token-endpoint error surfaced, got %v", err)
+	}
+}
+
+// memStore is an in-memory RefreshStore for the Authorization Code tests.
+type memStore struct {
+	mu sync.Mutex
+	m  map[string]string
+}
+
+func (s *memStore) Get(k string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.m[k]
+}
+
+func (s *memStore) Put(k, v string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[k] = v
+}
+
+func TestAuthorizationCodeFlow(t *testing.T) {
+	ts := &tokenServer{respBody: `{"access_token":"at","refresh_token":"rt","expires_in":3600}`}
+	srv := httptest.NewServer(http.HandlerFunc(ts.handler))
+	defer srv.Close()
+
+	cfg := Config{
+		GrantType:   "Authorization Code",
+		AuthURL:     "https://idp.example/authorize",
+		TokenURL:    srv.URL,
+		RedirectURL: "", // ephemeral loopback listener
+		ClientID:    "cid",
+		Scope:       "openid profile",
+		PKCE:        true,
+	}
+
+	// Stub the browser: parse the authorization URL, then hit the redirect the
+	// way a provider would after the user signs in.
+	var sawChallenge, sawMethod, sawRedirect string
+	cache := NewCache().SetInteractive(true).SetStore(&memStore{m: map[string]string{}})
+	store := cache.store.(*memStore)
+	cache.openURL = func(authURL string) error {
+		u, err := url.Parse(authURL)
+		if err != nil {
+			return err
+		}
+		q := u.Query()
+		sawChallenge = q.Get("code_challenge")
+		sawMethod = q.Get("code_challenge_method")
+		sawRedirect = q.Get("redirect_uri")
+		resp, err := http.Get(q.Get("redirect_uri") + "?code=the-code&state=" + url.QueryEscape(q.Get("state")))
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		return nil
+	}
+
+	r := NewResolver(map[string]Config{"idp": cfg}, cache)
+	s := &step.Step{Headers: map[string]string{"Authorization": `Bearer {{$auth.token("idp")}}`}}
+	if err := r.Resolve(s); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got := s.Headers["Authorization"]; got != "Bearer at" {
+		t.Errorf("Authorization header: want %q, got %q", "Bearer at", got)
+	}
+
+	// PKCE challenge was advertised on the auth URL...
+	if sawChallenge == "" || sawMethod != "S256" {
+		t.Errorf("expected an S256 PKCE challenge, got challenge=%q method=%q", sawChallenge, sawMethod)
+	}
+	// ...and the matching verifier + redirect were sent to the token endpoint.
+	if ts.lastForm.Get("grant_type") != "authorization_code" {
+		t.Errorf("grant_type: %q", ts.lastForm.Get("grant_type"))
+	}
+	if ts.lastForm.Get("code") != "the-code" {
+		t.Errorf("code: %q", ts.lastForm.Get("code"))
+	}
+	if ts.lastForm.Get("code_verifier") == "" {
+		t.Error("expected a PKCE code_verifier in the token exchange")
+	}
+	if ts.lastForm.Get("redirect_uri") != sawRedirect {
+		t.Errorf("redirect_uri mismatch: auth=%q token=%q", sawRedirect, ts.lastForm.Get("redirect_uri"))
+	}
+	// The refresh token was persisted for next time.
+	if store.Get(cacheKey("idp", cfg)) != "rt" {
+		t.Errorf("expected the refresh token to be persisted, store=%v", store.m)
+	}
+
+	// A second resolve reuses the cached access token — no browser, no fetch.
+	cache.openURL = func(string) error { t.Fatal("second resolve should not open a browser"); return nil }
+	s2 := &step.Step{Headers: map[string]string{"Authorization": `Bearer {{$auth.token("idp")}}`}}
+	if err := r.Resolve(s2); err != nil {
+		t.Fatalf("resolve 2: %v", err)
+	}
+	if ts.hits != 1 {
+		t.Errorf("expected a single token exchange, got %d", ts.hits)
+	}
+}
+
+func TestRefreshTokenRenewsSilently(t *testing.T) {
+	ts := &tokenServer{respBody: `{"access_token":"fresh","expires_in":3600}`}
+	srv := httptest.NewServer(http.HandlerFunc(ts.handler))
+	defer srv.Close()
+
+	cfg := Config{
+		GrantType: "Authorization Code",
+		AuthURL:   "https://idp.example/authorize",
+		TokenURL:  srv.URL,
+		ClientID:  "cid",
+		PKCE:      true,
+	}
+	store := &memStore{m: map[string]string{cacheKey("idp", cfg): "saved-rt"}}
+	cache := NewCache().SetInteractive(true).SetStore(store)
+	cache.openURL = func(string) error { t.Fatal("a saved refresh token should renew without a browser"); return nil }
+
+	r := NewResolver(map[string]Config{"idp": cfg}, cache)
+	s := &step.Step{Headers: map[string]string{"Authorization": `Bearer {{$auth.token("idp")}}`}}
+	if err := r.Resolve(s); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if s.Headers["Authorization"] != "Bearer fresh" {
+		t.Errorf("expected a refreshed token, got %q", s.Headers["Authorization"])
+	}
+	if ts.lastForm.Get("grant_type") != "refresh_token" || ts.lastForm.Get("refresh_token") != "saved-rt" {
+		t.Errorf("expected a refresh_token grant with the saved token, got %v", ts.lastForm)
+	}
+}
+
+func TestAuthCodeHeadlessNeedsLogin(t *testing.T) {
+	// Non-interactive cache (the headless default) with no saved token: the step
+	// must fail with a clear, actionable error rather than blocking on a browser.
+	cfg := Config{GrantType: "Authorization Code", AuthURL: "https://idp/a", TokenURL: "https://idp/t", ClientID: "cid"}
+	r := NewResolver(map[string]Config{"idp": cfg}, NewCache())
+	s := &step.Step{Headers: map[string]string{"A": `{{$auth.token("idp")}}`}}
+	err := r.Resolve(s)
+	if err == nil || !strings.Contains(err.Error(), "browser sign-in") {
+		t.Errorf("expected an interactive-sign-in error, got %v", err)
+	}
+}
+
+func TestAuthCodeEmptyClientIDFailsFast(t *testing.T) {
+	// An empty Client ID (e.g. an unset {{$processEnv}}) must fail with a clear
+	// error before any browser opens, not send the user to a broken auth page.
+	cfg := Config{GrantType: "Authorization Code", AuthURL: "https://idp/a", TokenURL: "https://idp/t", ClientID: ""}
+	cache := NewCache().SetInteractive(true)
+	cache.openURL = func(string) error { t.Fatal("must not open a browser with an empty Client ID"); return nil }
+	r := NewResolver(map[string]Config{"idp": cfg}, cache)
+	s := &step.Step{Headers: map[string]string{"A": `{{$auth.token("idp")}}`}}
+	err := r.Resolve(s)
+	if err == nil || !strings.Contains(err.Error(), "Client ID") {
+		t.Errorf("expected a clear empty-Client-ID error, got %v", err)
+	}
+}
+
+func TestNeedsInteractiveLogin(t *testing.T) {
+	cfg := Config{GrantType: "Authorization Code", AuthURL: "https://idp/a", TokenURL: "https://idp/t", ClientID: "c"}
+	s := step.Step{Headers: map[string]string{"Authorization": `Bearer {{$auth.token("idp")}}`}}
+
+	// Fresh Authorization Code config with no cached or saved token → browser.
+	if r := NewResolver(map[string]Config{"idp": cfg}, NewCache()); !r.NeedsInteractiveLogin(s) {
+		t.Error("a fresh Authorization Code config should need an interactive login")
+	}
+	// A saved refresh token renews silently → no browser.
+	store := &memStore{m: map[string]string{cacheKey("idp", cfg): "rt"}}
+	if r := NewResolver(map[string]Config{"idp": cfg}, NewCache().SetStore(store)); r.NeedsInteractiveLogin(s) {
+		t.Error("a saved refresh token should not require a browser")
+	}
+	// A back-channel grant never needs a browser.
+	cc := Config{GrantType: "Client Credentials", TokenURL: "https://idp/t"}
+	if r := NewResolver(map[string]Config{"idp": cc}, NewCache()); r.NeedsInteractiveLogin(s) {
+		t.Error("Client Credentials should not require a browser")
+	}
+}
+
+func TestBuildAuthURLPreservesExistingParams(t *testing.T) {
+	// Provider-specific params on the Auth URL (e.g. Google's
+	// access_type=offline & prompt=consent, needed to get a refresh token) must
+	// survive alongside the standard OAuth2 params lazyhttp adds.
+	cfg := Config{
+		AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth?access_type=offline&prompt=consent",
+		ClientID: "cid",
+		Scope:    "openid email",
+		PKCE:     true,
+	}
+	got, err := buildAuthURL(cfg, "http://localhost:8080/callback", "st", "verifier")
+	if err != nil {
+		t.Fatalf("buildAuthURL: %v", err)
+	}
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	q := u.Query()
+	for k, want := range map[string]string{
+		"access_type":           "offline",
+		"prompt":                "consent",
+		"response_type":         "code",
+		"client_id":             "cid",
+		"redirect_uri":          "http://localhost:8080/callback",
+		"scope":                 "openid email",
+		"state":                 "st",
+		"code_challenge_method": "S256",
+	} {
+		if q.Get(k) != want {
+			t.Errorf("param %q = %q, want %q", k, q.Get(k), want)
+		}
+	}
+	if q.Get("code_challenge") == "" {
+		t.Error("expected a PKCE code_challenge")
 	}
 }
 

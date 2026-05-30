@@ -267,9 +267,9 @@ Authorization: Bearer {{$auth.token("demo")}}
 - **The token is fetched once and cached** for the rest of the session, honoring
   the endpoint's `expires_in` (refetched a little early, and again once expired),
   so a plan of twenty requests performs a single token fetch.
-- **Grant types:** `Client Credentials` and `Password` — the two that work
-  without a browser round-trip. The interactive grants (`Authorization Code`,
-  `Device Authorization`, `Implicit`) are **not** supported.
+- **Grant types:** `Client Credentials`, `Password`, and `Authorization Code`
+  (the interactive, browser-based grant — see below). `Device Authorization` and
+  `Implicit` are **not** supported.
 - **Client authentication** follows `Client Credentials`: `"basic"` (HTTP Basic,
   the default when a secret is present), `"in body"` (`client_id`/`client_secret`
   in the form), or `"none"`. `Password` grant additionally reads `Username` and
@@ -284,6 +284,69 @@ Authorization: Bearer {{$auth.token("demo")}}
 > Like `@import`, this reuses the IntelliJ JSON shape, so a plan that uses
 > `{{$auth.token(...)}}` with a `Security.Auth` env block stays portable to the
 > IntelliJ HTTP Client. See [`example.oauth.http`](../example.oauth.http).
+
+#### Authorization Code (browser sign-in)
+
+For user-facing APIs (Google, GitHub, Okta, Auth0, most SaaS) use the
+`Authorization Code` grant. lazyhttp opens your browser to the provider's login
+page, catches the redirect on a localhost listener, and exchanges the code for a
+token — using PKCE (S256) by default.
+
+To see the whole round-trip with **no setup**, run
+[`example.browser.http`](../example.browser.http) against the bundled demo
+identity provider (`just demo-server`, then `just demo-browser`) — no accounts,
+client IDs, or secrets.
+
+For a real provider, point the same config shape at the provider's endpoints.
+Here is a complete Google config (create a "Web application" OAuth client, add
+`http://localhost:8080/callback` to its authorized redirect URIs, and put the
+Client ID inline / the secret in `{{$processEnv GOOGLE_CLIENT_SECRET}}`):
+
+```json
+{
+  "google": {
+    "Security": {
+      "Auth": {
+        "google": {
+          "Type": "OAuth2",
+          "Grant Type": "Authorization Code",
+          "Auth URL": "https://accounts.google.com/o/oauth2/v2/auth?access_type=offline&prompt=consent",
+          "Token URL": "https://oauth2.googleapis.com/token",
+          "Redirect URL": "http://localhost:8080/callback",
+          "Client ID": "{{$processEnv GOOGLE_CLIENT_ID}}",
+          "Client Secret": "{{$processEnv GOOGLE_CLIENT_SECRET}}",
+          "Scope": "openid email profile",
+          "Client Credentials": "in body"
+        }
+      }
+    }
+  }
+}
+```
+
+- **`Auth URL`** is the browser authorization endpoint; **`Token URL`** is the
+  back-channel code-exchange endpoint. **`Redirect URL`** must match a callback
+  **registered with the provider** (for Google, add it under your OAuth client's
+  *Authorized redirect URIs*) — lazyhttp binds that exact `localhost` port and
+  path to catch the redirect. Omit it and lazyhttp picks a free loopback port at
+  `/callback` (only works if the provider accepts a dynamic loopback redirect).
+- **Provider-specific params** go right on the `Auth URL` query string — lazyhttp
+  keeps them and adds the standard OAuth2 params alongside. Google needs
+  `access_type=offline&prompt=consent` to return a **refresh token**; without it
+  you'd re-sign-in every session.
+- **PKCE is on by default.** Add `"PKCE": false` to disable the S256 challenge
+  for a provider that rejects it; a public client (no `Client Secret`) relies on
+  PKCE alone.
+- **`Client Credentials`** controls how the client authenticates at the token
+  endpoint, same as the other grants: `"in body"` (Google's documented way),
+  `"basic"`, or `"none"`.
+- **Sign in once.** After a successful login the **refresh token is saved** to
+  `tokens.json` in your OS config dir (mode `0600`), so later sessions renew the
+  token silently without reopening the browser.
+- **Run from the TUI first.** Only the interactive TUI opens a browser. The
+  headless `lazyhttp run` reuses a saved refresh token when one exists; with no
+  saved login it fails the step with a clear message rather than blocking — so
+  sign in once in the TUI, then CI can run headlessly off the stored token.
 
 ### Basic authentication
 
@@ -544,8 +607,8 @@ Each entry lists the upstream syntax and what lazyhttp does with it today.
   (`Basic` auth shorthand *is* supported — see
   [Basic authentication](#basic-authentication) — and OAuth2 *is* supported via
   `Security.Auth` + `{{$auth.token(...)}}`; see
-  [OAuth2 authentication](#oauth2-authentication) — but only the Client Credentials
-  and Password grants; the interactive grants that need a browser are not.)
+  [OAuth2 authentication](#oauth2-authentication) — covering the Client
+  Credentials, Password, and Authorization Code grants.)
 - **`//` comment/directive prefix** — `// @name Foo`.
   Not recognized; lazyhttp directives require a `#` prefix.
 - **Multi-line URLs** — continuation lines starting with `?` / `&`.

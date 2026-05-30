@@ -80,11 +80,19 @@ The data flows in one direction: **parse → expand → execute → evaluate →
   `Security.Auth` blocks into `Config`s (via `httpfile.LoadAuth`); a `Resolver` then
   substitutes `{{$auth.token("id")}}` / `{{$auth.idToken("id")}}` placeholders in a
   step's URL/headers/body by fetching a token from the config's Token URL. A
-  thread-safe `Cache` reuses tokens until `expires_in` lapses. Only the Client
-  Credentials and Password grants are implemented (no browser round-trip). Wired in
-  through `runner.Plan.AuthResolver`, which expands config values (so secrets resolve
-  without racing the request goroutine) and hands a `Resolver` — satisfying
-  `exec.AuthResolver` — to the executor; only the token fetch runs off-thread.
+  thread-safe `Cache` reuses tokens until `expires_in` lapses. Three grants are
+  implemented: Client Credentials and Password (single back-channel POST) and
+  Authorization Code (`authcode.go` — the interactive browser round-trip with PKCE
+  by default; `browser.go` shells out to open the browser like `internal/clipboard`).
+  Authorization Code persists its refresh token through an injected `RefreshStore`
+  (`config.TokenStore` writes `tokens.json` 0600) so the browser login happens once;
+  the `Cache` carries an `interactive` flag (true only in the TUI) so the headless
+  `run` renews from a saved token or fails with a clear error instead of opening a
+  browser. Wired in through `runner.Plan.AuthResolver`, which expands config values
+  (so secrets resolve without racing the request goroutine) and hands a `Resolver` —
+  satisfying `exec.AuthResolver` — to the executor; only the token fetch runs
+  off-thread. `runner.Plan.NeedsInteractiveLogin` lets the TUI show a
+  "waiting for browser sign-in" notice before a step that will open the browser.
 
 - **`internal/ui`** — the Bubble Tea root. `model.go` is the heart: it holds a
   `*runner.Plan` (the steps, results, and variable lifecycle) and drives it, owning the

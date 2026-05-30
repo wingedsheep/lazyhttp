@@ -20,10 +20,14 @@ vet:
 run plan="example.http" env="dev": build
     ./bin/lazyhttp --env {{env}} {{plan}}
 
-# Start the local OAuth2 demo server (token + echo resource) on :9000.
+# Start the local OAuth2 demo server (authorize + token + echo resource) on :9000.
 demo-server:
     python3 scripts/oauth-demo-server.py
 
-# Run example.oauth.http against the local demo server (start `just demo-server` first).
+# Run example.oauth.http (client credentials) against the local demo server (start `just demo-server` first).
 demo: build
     ./bin/lazyhttp --env local example.oauth.http
+
+# Run example.browser.http (browser sign-in) against the local demo server (start `just demo-server` first).
+demo-browser: build
+    ./bin/lazyhttp --env local example.browser.http

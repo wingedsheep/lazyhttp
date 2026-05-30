@@ -19,10 +19,13 @@
 # at your own OAuth2 provider and export the secret:
 #     OAUTH_CLIENT_SECRET=… lazyhttp --env dev example.oauth.http
 #
-# Supported grant types: Client Credentials and Password (the two that work
-# without a browser round-trip). The config lives in the env file so secrets stay
-# out of the plan; the request preview (`i`) shows the {{$auth.token(...)}}
-# placeholder, never the resolved token.
+# Supported grant types: Client Credentials, Password, and Authorization Code.
+# This file demonstrates the back-channel Client Credentials grant; for the
+# interactive, browser-based Authorization Code grant see example.browser.http
+# (a complete, no-setup browser sign-in against the bundled demo server). The
+# config lives in the env file so
+# secrets stay out of the plan; the request preview (`i`) shows the
+# {{$auth.token(...)}} placeholder, never the resolved token.
 
 ### Call a protected endpoint
 # @group OAuth2
