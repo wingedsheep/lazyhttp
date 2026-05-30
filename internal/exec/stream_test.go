@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,59 @@ import (
 
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
+
+// endlessBody is a response body that yields bytes forever, so a stream-through
+// command echoing it keeps the events channel pegged full — the setup the leak
+// test below needs to force the pump to block mid-send.
+type endlessBody struct{}
+
+func (endlessBody) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'y'
+	}
+	return len(p), nil
+}
+func (endlessBody) Close() error { return nil }
+
+// TestPumpThroughCancelDoesNotLeak is the regression guard for the cancel leak:
+// with the events channel full and nobody draining it, a cancel must still let
+// pumpThrough return. Before the guarded send, the read loop sat blocked on a
+// full channel forever (the kill only stops the command, not the send), leaking
+// the goroutine. We deliberately never read events, so the only way to observe
+// completion is the goroutine returning.
+func TestPumpThroughCancelDoesNotLeak(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell pipeline")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: endlessBody{}}
+	events := make(chan streamEvent, 32)
+	finished := make(chan struct{})
+	// `cat` echoes the endless body straight back, filling stdout faster than the
+	// (unread) channel can take it.
+	go func() {
+		pumpThrough(ctx, resp, step.Step{StreamThrough: "cat"}, time.Now(), events)
+		close(finished)
+	}()
+
+	// Wait until the channel is full, i.e. the pump is blocked on a send.
+	for i := 0; len(events) < cap(events); i++ {
+		if i > 200 {
+			t.Fatal("events channel never filled — pump did not start sending")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-finished:
+		// Good: the guarded send unblocked on ctx and the goroutine returned.
+	case <-time.After(3 * time.Second):
+		t.Fatal("pumpThrough did not return after cancel with a full channel — goroutine leaked")
+	}
+}
 
 // flushWriter wraps a ResponseWriter to flush after every write, so the test
 // client sees chunks arrive incrementally rather than all at once on close.
@@ -218,6 +272,52 @@ func TestRunStreamConnectError(t *testing.T) {
 	}
 	if res.Index != 3 || res.Result.Err == nil {
 		t.Errorf("want failed result for index 3, got index=%d err=%v", res.Index, res.Result.Err)
+	}
+}
+
+// TestRunStreamThroughCancel checks the cancel path of the stream-through pump:
+// cancelling mid-stream must terminate the pump goroutine and yield a
+// StreamDoneMsg even though a transform command is in the pipe. The transform
+// floods stdout (so the events channel is under pressure) until killed, which is
+// the case where an unguarded send could wedge the goroutine.
+func TestRunStreamThroughCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell pipeline")
+	}
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "go\n")
+		flush(w)
+		<-release // hold the connection open until the test lets go
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	// `yes` floods stdout forever, so the pump keeps trying to send until the
+	// cancel kills it — exactly the condition the guarded send must survive.
+	s := step.Step{Kind: step.KindHTTP, Method: "GET", URL: srv.URL, Stream: true,
+		StreamThrough: "yes"}
+	start, ok := RunStream(0, s, nil)().(StreamStartMsg)
+	if !ok {
+		t.Fatal("expected StreamStartMsg")
+	}
+	sub := start.Sub
+
+	if _, ok := WaitForChunk(sub)().(StreamChunkMsg); !ok {
+		t.Fatal("expected a first chunk before cancel")
+	}
+
+	sub.Cancel()
+	done := make(chan tea.Msg, 1)
+	go func() { done <- WaitForChunk(sub)() }()
+	select {
+	case msg := <-done:
+		if _, ok := msg.(StreamDoneMsg); !ok {
+			t.Errorf("after cancel, want StreamDoneMsg, got %T", msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("WaitForChunk did not return after cancel — pumpThrough goroutine leaked")
 	}
 }
 

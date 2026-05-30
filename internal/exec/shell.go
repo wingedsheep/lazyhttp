@@ -20,7 +20,7 @@ func doShell(s step.Step) step.Result {
 
 	cmd := shellCommand(s.Body)
 	cmd.Env = os.Environ()
-	var out bytes.Buffer
+	var out limitedBuffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 

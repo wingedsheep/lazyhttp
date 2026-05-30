@@ -294,15 +294,30 @@ func (e *sseExtractor) line(line string) string {
 // in slices and emitted as chunks (and accumulated as the body for
 // captures/asserts). It mirrors pump's lifecycle — always closing the body and
 // the events channel, sending a terminal event — so WaitForChunk terminates and
-// nothing leaks. ctx (the request's) is watched so a cancel kills the command.
+// nothing leaks. ctx (the request's) is watched so a cancel kills the command;
+// every send is guarded on ctx so a cancel that kills the command but leaves its
+// stdout open can't wedge this goroutine on a full events channel once
+// WaitForChunk has stopped draining.
 func pumpThrough(ctx context.Context, resp *http.Response, s step.Step, start time.Time, events chan<- streamEvent) {
 	defer close(events)
 	defer resp.Body.Close()
 
+	// send delivers an event unless the request is cancelled first, in which case
+	// it abandons the send and reports false. The deferred close(events) then ends
+	// the stream for WaitForChunk, so a dropped event never strands the consumer.
+	send := func(ev streamEvent) bool {
+		select {
+		case events <- ev:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
 	fail := func(err error) {
-		events <- streamEvent{done: true, result: step.Result{
+		send(streamEvent{done: true, result: step.Result{
 			Status: step.Failed, StatusCode: resp.StatusCode, Header: resp.Header,
-			Err: err, Duration: time.Since(start), NoRedirect: s.NoRedirect}}
+			Err: err, Duration: time.Since(start), NoRedirect: s.NoRedirect}})
 	}
 
 	cmd := shellCommand(s.StreamThrough)
@@ -351,7 +366,9 @@ func pumpThrough(ctx context.Context, resp *http.Response, s step.Step, start ti
 		if n > 0 {
 			chunk := string(buf[:n])
 			acc.WriteString(chunk)
-			events <- streamEvent{data: chunk}
+			if !send(streamEvent{data: chunk}) {
+				break // cancelled — stop pumping; the deferred close ends the stream
+			}
 		}
 		if err != nil {
 			break // EOF when the command closes its stdout
@@ -368,12 +385,12 @@ func pumpThrough(ctx context.Context, resp *http.Response, s step.Step, start ti
 	}
 	// A non-zero exit (or spawn failure) from the transform fails the step, with
 	// the command's stderr as the reason — but not when the kill was our own
-	// doing on a deliberate cancel.
+	// doing on a deliberate cancel. cmd.Wait always runs so the process is reaped.
 	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
 		res.Status = step.Failed
 		res.Err = transformError(err, errBuf.String())
 	}
-	events <- streamEvent{done: true, result: res}
+	send(streamEvent{done: true, result: res})
 }
 
 // applyStreamTransform converts a fully-buffered stream body the same way the

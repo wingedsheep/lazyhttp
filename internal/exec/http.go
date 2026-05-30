@@ -85,7 +85,7 @@ func doHTTP(s step.Step, auth AuthResolver) step.Result {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, truncated, err := readLimited(resp.Body)
 	if err != nil {
 		return fail(err)
 	}
@@ -99,6 +99,9 @@ func doHTTP(s step.Step, auth AuthResolver) step.Result {
 		if err != nil {
 			return fail(err)
 		}
+	}
+	if truncated {
+		out += truncationNotice
 	}
 
 	return step.Result{
