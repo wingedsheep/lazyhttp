@@ -29,11 +29,12 @@ func (endlessBody) Read(p []byte) (int, error) {
 func (endlessBody) Close() error { return nil }
 
 // TestPumpThroughCancelDoesNotLeak is the regression guard for the cancel leak:
-// with the events channel full and nobody draining it, a cancel must still let
-// pumpThrough return. Before the guarded send, the read loop sat blocked on a
-// full channel forever (the kill only stops the command, not the send), leaking
-// the goroutine. We deliberately never read events, so the only way to observe
-// completion is the goroutine returning.
+// with the events channel full and nobody draining it, abandoning the
+// subscription (closing gone, as Cancel does) must still let pumpThrough return.
+// Before the guarded send, the read loop sat blocked on a full channel forever
+// (the kill only stops the command, not the send), leaking the goroutine. We
+// deliberately never read events, so the only way to observe completion is the
+// goroutine returning.
 func TestPumpThroughCancelDoesNotLeak(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses a POSIX shell pipeline")
@@ -43,11 +44,12 @@ func TestPumpThroughCancelDoesNotLeak(t *testing.T) {
 
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: endlessBody{}}
 	events := make(chan streamEvent, 32)
+	gone := make(chan struct{})
 	finished := make(chan struct{})
 	// `cat` echoes the endless body straight back, filling stdout faster than the
 	// (unread) channel can take it.
 	go func() {
-		pumpThrough(ctx, resp, step.Step{StreamThrough: "cat"}, time.Now(), events)
+		pumpThrough(ctx, resp, step.Step{StreamThrough: "cat"}, time.Now(), events, gone)
 		close(finished)
 	}()
 
@@ -59,12 +61,14 @@ func TestPumpThroughCancelDoesNotLeak(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
+	// Abandon the subscription the way Cancel does, then cancel the request.
+	close(gone)
 	cancel()
 	select {
 	case <-finished:
-		// Good: the guarded send unblocked on ctx and the goroutine returned.
+		// Good: the guarded send unblocked on gone and the goroutine returned.
 	case <-time.After(3 * time.Second):
-		t.Fatal("pumpThrough did not return after cancel with a full channel — goroutine leaked")
+		t.Fatal("pumpThrough did not return after Cancel with a full channel — goroutine leaked")
 	}
 }
 
@@ -358,5 +362,99 @@ func TestRunStreamCancel(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("WaitForChunk did not return after cancel — pump goroutine leaked")
+	}
+}
+
+// drainAfterStop keeps pulling from sub until a terminal message arrives,
+// collecting any remaining chunk data, and asserts the terminal is a ResultMsg
+// (Stop keeps the result) rather than a StreamDoneMsg (Cancel discards it).
+func drainAfterStop(t *testing.T, sub *StreamSub) ResultMsg {
+	t.Helper()
+	out := make(chan tea.Msg, 1)
+	go func() {
+		for {
+			switch m := WaitForChunk(sub)().(type) {
+			case StreamChunkMsg:
+				continue
+			default:
+				out <- m
+				return
+			}
+		}
+	}()
+	select {
+	case m := <-out:
+		res, ok := m.(ResultMsg)
+		if !ok {
+			t.Fatalf("after Stop, want a terminal ResultMsg, got %T", m)
+		}
+		return res
+	case <-time.After(3 * time.Second):
+		t.Fatal("WaitForChunk did not deliver a terminal result after Stop")
+		return ResultMsg{}
+	}
+}
+
+// TestRunStreamStopKeepsResult checks the graceful-stop path: stopping mid-stream
+// delivers the accumulated body as a normal terminal result, so what already
+// arrived is kept (and captures/assertions can run) rather than discarded.
+func TestRunStreamStopKeepsResult(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "data: first\n\n")
+		flush(w)
+		<-release // hold the connection open until the test lets go
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	start := RunStream(0, step.Step{Kind: step.KindHTTP, Method: "GET", URL: srv.URL, Stream: true}, nil)().(StreamStartMsg)
+	sub := start.Sub
+	if _, ok := WaitForChunk(sub)().(StreamChunkMsg); !ok {
+		t.Fatal("expected a first chunk before stop")
+	}
+
+	sub.Stop()
+	res := drainAfterStop(t, sub)
+	if !strings.Contains(res.Result.Body, "data: first") {
+		t.Errorf("stopped result should keep the partial body, got %q", res.Result.Body)
+	}
+	if res.Result.Status == step.Failed {
+		t.Errorf("a graceful stop should not fail the step: %v", res.Result.Err)
+	}
+}
+
+// TestRunStreamThroughStopKeepsResult is the stream-through counterpart: a Stop
+// kills the transform but still delivers what it produced as the terminal result.
+func TestRunStreamThroughStopKeepsResult(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell pipeline")
+	}
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "alpha\n")
+		flush(w)
+		<-release
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	s := step.Step{Kind: step.KindHTTP, Method: "GET", URL: srv.URL, Stream: true, StreamThrough: "cat"}
+	start := RunStream(0, s, nil)().(StreamStartMsg)
+	sub := start.Sub
+	if _, ok := WaitForChunk(sub)().(StreamChunkMsg); !ok {
+		t.Fatal("expected a first chunk before stop")
+	}
+
+	sub.Stop()
+	res := drainAfterStop(t, sub)
+	if !strings.Contains(res.Result.Body, "alpha") {
+		t.Errorf("stopped through-result should keep the partial body, got %q", res.Result.Body)
+	}
+	if res.Result.Status == step.Failed {
+		t.Errorf("a graceful stop should not fail the step: %v", res.Result.Err)
 	}
 }

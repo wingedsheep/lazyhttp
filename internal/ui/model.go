@@ -355,6 +355,21 @@ func (m *Model) cancelStream() {
 	m.streamIndex = -1
 }
 
+// stopStream ends an in-flight `# @stream` early but keeps what has arrived: it
+// asks the subscription to Stop, so the pump delivers the partial body as a
+// normal terminal result (the existing WaitForChunk command picks it up, and
+// onResult runs captures/assertions and clears the live-stream state). The
+// run-from-here chain is halted, since a manual stop is a deliberate "stop
+// here". Contrast cancelStream, which throws the partial result away. A no-op
+// when nothing is streaming.
+func (m *Model) stopStream() {
+	if m.streamSub == nil {
+		return
+	}
+	m.streamSub.Stop()
+	m.runFrom = -1
+}
+
 // run marks a step running and returns the command that executes it, with all
 // {{vars}} expanded against the current variable set (including captures).
 func (m *Model) run(i int) tea.Cmd {

@@ -55,29 +55,48 @@ type StreamDoneMsg struct {
 
 // StreamSub is a live subscription to a streaming response. It is opaque to the
 // UI: hold the one delivered by StreamStartMsg / StreamChunkMsg and pass it to
-// WaitForChunk to pull the next message; call Cancel to abort.
+// WaitForChunk to pull the next message. End it with Stop (keep what arrived) or
+// Cancel (throw it away).
 type StreamSub struct {
-	index     int
-	events    <-chan streamEvent
-	cancel    context.CancelFunc
-	cancelled int32 // atomic; set by Cancel so WaitForChunk drops late events
+	index   int
+	events  <-chan streamEvent
+	cancel  context.CancelFunc
+	discard int32         // atomic; set by Cancel so WaitForChunk drops buffered events
+	gone    chan struct{} // closed by Cancel so the pump stops trying to deliver them
 }
 
-// Cancel aborts the in-flight request and tells WaitForChunk to discard whatever
-// is still buffered instead of delivering it. Safe to call more than once. The
-// pump goroutine still drains to completion (WaitForChunk keeps reading), so
-// nothing leaks.
-func (s *StreamSub) Cancel() {
+// Stop ends the request early but keeps what has already streamed in: the pump
+// stops reading and delivers the accumulated body as the terminal result, so the
+// step finishes normally — captures and assertions run against the partial
+// response — instead of being discarded. Safe to call more than once.
+func (s *StreamSub) Stop() {
 	if s == nil {
 		return
 	}
-	atomic.StoreInt32(&s.cancelled, 1)
 	if s.cancel != nil {
 		s.cancel()
 	}
 }
 
-func (s *StreamSub) isCancelled() bool { return atomic.LoadInt32(&s.cancelled) == 1 }
+// Cancel aborts the in-flight request and discards whatever streamed in:
+// WaitForChunk drops the remaining events and the pump stops trying to deliver
+// them. Use it when the result is being thrown away anyway (reload, clear, env
+// switch). Safe to call more than once.
+func (s *StreamSub) Cancel() {
+	if s == nil {
+		return
+	}
+	// Close gone exactly once, before cancelling, so a pump blocked on a send
+	// unblocks rather than waiting for a consumer that has given up.
+	if atomic.CompareAndSwapInt32(&s.discard, 0, 1) {
+		close(s.gone)
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
+}
+
+func (s *StreamSub) isDiscarded() bool { return atomic.LoadInt32(&s.discard) == 1 }
 
 // streamEvent is one item from the pump goroutine: a body slice (done == false)
 // or the terminal event carrying the finished Result (done == true).
@@ -129,13 +148,14 @@ func RunStream(index int, s step.Step, auth AuthResolver) tea.Cmd {
 		}
 
 		events := make(chan streamEvent, 32)
+		gone := make(chan struct{})
 		if s.StreamThrough != "" {
-			go pumpThrough(ctx, resp, s, start, events)
+			go pumpThrough(ctx, resp, s, start, events, gone)
 		} else {
 			go pump(resp, s, start, events)
 		}
 		return StreamStartMsg{Index: index, Sub: &StreamSub{
-			index: index, events: events, cancel: cancel}}
+			index: index, events: events, cancel: cancel, gone: gone}}
 	}
 }
 
@@ -206,8 +226,9 @@ func pump(resp *http.Response, s step.Step, start time.Time, events chan<- strea
 // WaitForChunk returns a command that blocks until the next event from sub
 // arrives, yielding it as a StreamChunkMsg (more to come) or a terminal
 // ResultMsg (the stream closed). After Cancel it instead drains every remaining
-// event — letting the pump goroutine finish — and returns a StreamDoneMsg. The
-// UI returns this command after each StreamStartMsg / StreamChunkMsg.
+// event — letting the pump goroutine finish — and returns a StreamDoneMsg; after
+// Stop the terminal ResultMsg flows through normally, so the partial body is
+// kept. The UI returns this command after each StreamStartMsg / StreamChunkMsg.
 func WaitForChunk(sub *StreamSub) tea.Cmd {
 	return func() tea.Msg {
 		for {
@@ -215,7 +236,7 @@ func WaitForChunk(sub *StreamSub) tea.Cmd {
 			if !ok {
 				return StreamDoneMsg{Index: sub.index, Sub: sub}
 			}
-			if sub.isCancelled() {
+			if sub.isDiscarded() {
 				if ev.done {
 					return StreamDoneMsg{Index: sub.index, Sub: sub}
 				}
@@ -294,22 +315,24 @@ func (e *sseExtractor) line(line string) string {
 // in slices and emitted as chunks (and accumulated as the body for
 // captures/asserts). It mirrors pump's lifecycle — always closing the body and
 // the events channel, sending a terminal event — so WaitForChunk terminates and
-// nothing leaks. ctx (the request's) is watched so a cancel kills the command;
-// every send is guarded on ctx so a cancel that kills the command but leaves its
-// stdout open can't wedge this goroutine on a full events channel once
-// WaitForChunk has stopped draining.
-func pumpThrough(ctx context.Context, resp *http.Response, s step.Step, start time.Time, events chan<- streamEvent) {
+// nothing leaks. ctx (the request's) is watched so a cancel/stop kills the
+// command; gone is watched on every send so an abandoned subscription (Cancel)
+// that kills the command but leaves its stdout open can't wedge this goroutine on
+// a full events channel. A graceful Stop cancels ctx but not gone, so the
+// accumulated terminal result is still delivered.
+func pumpThrough(ctx context.Context, resp *http.Response, s step.Step, start time.Time, events chan<- streamEvent, gone <-chan struct{}) {
 	defer close(events)
 	defer resp.Body.Close()
 
-	// send delivers an event unless the request is cancelled first, in which case
-	// it abandons the send and reports false. The deferred close(events) then ends
-	// the stream for WaitForChunk, so a dropped event never strands the consumer.
+	// send delivers an event unless the subscription was abandoned (Cancel closes
+	// gone), in which case it drops the event and reports false. It does not bail
+	// merely because ctx was cancelled — a Stop cancels ctx to halt reading yet
+	// still wants the partial terminal result delivered.
 	send := func(ev streamEvent) bool {
 		select {
 		case events <- ev:
 			return true
-		case <-ctx.Done():
+		case <-gone:
 			return false
 		}
 	}

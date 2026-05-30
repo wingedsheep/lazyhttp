@@ -390,3 +390,21 @@ func TestStreamChunkIgnoredAfterStreamCleared(t *testing.T) {
 		t.Errorf("a chunk for a cleared stream should be dropped, got %q", body)
 	}
 }
+
+// TestStopStreamNoOpWhenNotStreaming guards the design choice that the stop key
+// only acts on a live stream: with nothing streaming it must leave an active
+// run-from-here chain (which fires non-stream steps) untouched. The streaming
+// path itself — that Stop keeps the partial result — is covered by the exec
+// package's TestRunStreamStopKeepsResult.
+func TestStopStreamNoOpWhenNotStreaming(t *testing.T) {
+	m := newModel(&runner.Plan{
+		Steps:   []step.Step{{Name: "a"}, {Name: "b"}},
+		Results: make([]step.Result, 2),
+	}, 1) // a run-from-here chain is active at step 1
+	m.streamSub = nil // nothing is streaming
+
+	m.stopStream()
+	if m.runFrom != 1 {
+		t.Errorf("runFrom = %d, want 1 — stop must not halt a non-stream chain", m.runFrom)
+	}
+}
