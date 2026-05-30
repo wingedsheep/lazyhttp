@@ -235,3 +235,7 @@ cd lazyhttp
 go build -o bin/lazyhttp .
 ./bin/lazyhttp example.http
 ```
+
+## License
+
+[MIT](LICENSE)

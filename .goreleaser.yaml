@@ -54,6 +54,7 @@ homebrew_casks:
       - lazyhttp
     homepage: "https://github.com/wingedsheep/lazyhttp"
     description: "Terminal UI for running .http test plans step by step"
+    license: "MIT"
     repository:
       owner: wingedsheep
       name: homebrew-tap
