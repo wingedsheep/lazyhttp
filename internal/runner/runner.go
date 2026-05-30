@@ -15,6 +15,7 @@ import (
 
 	"github.com/wingedsheep/lazyhttp/internal/auth"
 	"github.com/wingedsheep/lazyhttp/internal/capture"
+	"github.com/wingedsheep/lazyhttp/internal/config"
 	"github.com/wingedsheep/lazyhttp/internal/exec"
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
 	"github.com/wingedsheep/lazyhttp/internal/step"
@@ -112,6 +113,11 @@ func Load(path, envName string) (*Plan, error) {
 		return nil, err
 	}
 	authConfigs, _ := httpfile.LoadAuth(path, envName)
+	// The cache persists Authorization Code refresh tokens so a browser sign-in
+	// survives restarts and headless runs renew silently. It is left
+	// non-interactive here (the headless default); the TUI flips it interactive
+	// so only it may open a browser.
+	cache := auth.NewCache().SetStore(config.NewTokenStore())
 	return &Plan{
 		Steps:       steps,
 		Results:     make([]step.Result, len(steps)),
@@ -119,7 +125,7 @@ func Load(path, envName string) (*Plan, error) {
 		Vars:        vars,
 		BaseVars:    cloneVars(vars),
 		AuthConfigs: authConfigs,
-		AuthCache:   auth.NewCache(),
+		AuthCache:   cache,
 	}, nil
 }
 
@@ -255,6 +261,7 @@ func (p *Plan) AuthResolver(s step.Step) exec.AuthResolver {
 	for id, c := range p.AuthConfigs {
 		c.TokenURL = expand(c.TokenURL)
 		c.AuthURL = expand(c.AuthURL)
+		c.RedirectURL = expand(c.RedirectURL)
 		c.ClientID = expand(c.ClientID)
 		c.ClientSecret = expand(c.ClientSecret)
 		c.Scope = expand(c.Scope)
@@ -263,6 +270,14 @@ func (p *Plan) AuthResolver(s step.Step) exec.AuthResolver {
 		cfgs[id] = c
 	}
 	return auth.NewResolver(cfgs, p.AuthCache)
+}
+
+// NeedsInteractiveLogin reports whether running step s would open a browser for
+// an Authorization Code sign-in (no cached or saved token yet). The TUI uses it
+// to show a "waiting for sign-in" notice before dispatch; it does no network I/O.
+func (p *Plan) NeedsInteractiveLogin(s step.Step) bool {
+	r, ok := p.AuthResolver(s).(*auth.Resolver)
+	return ok && r.NeedsInteractiveLogin(s)
 }
 
 // ResolveResponseRef resolves an inline response reference — VS Code REST Client

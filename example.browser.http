@@ -1,0 +1,25 @@
+# Browser sign-in — OAuth2 Authorization Code + PKCE, end to end, no setup.
+#
+# This runs the full interactive grant against a bundled local identity provider,
+# so you can see the browser round-trip with zero accounts, client IDs, or
+# secrets. lazyhttp opens your browser to the demo /authorize page; you click
+# "Approve"; it catches the redirect on a localhost listener and exchanges the
+# code for a token, then calls the demo resource with it.
+#
+#     just demo-server        # start the local demo IdP on :9000 (one terminal)
+#     just demo-browser       # or: lazyhttp --env local example.browser.http
+#
+# The demo issues a refresh token, so the token is saved to tokens.json and a
+# second run renews silently without reopening the browser. Run in the TUI (only
+# the TUI opens a browser); headless `lazyhttp run` reuses that saved login.
+#
+# For a real provider (Google), see the Authorization Code section of
+# docs/http-format.md — same config shape, pointed at the provider's endpoints.
+
+### Browser sign-in, then call a protected resource with the token
+# @group Browser auth
+# @name Browser sign-in
+GET {{api}}/me
+Authorization: Bearer {{$auth.token("browser")}}
+# @assert status == 200
+# @assert json.saw_authorization contains Bearer

@@ -185,18 +185,19 @@ func LoadAuth(planPath, envName string) (map[string]auth.Config, error) {
 	}
 	var sec struct {
 		Auth map[string]struct {
-			Type              string `json:"Type"`
-			GrantType         string `json:"Grant Type"`
-			TokenURL          string `json:"Token URL"`
-			AuthURL           string `json:"Auth URL"`
-			RedirectURL       string `json:"Redirect URL"`
-			ClientID          string `json:"Client ID"`
-			ClientSecret      string `json:"Client Secret"`
-			Scope             string `json:"Scope"`
-			Username          string `json:"Username"`
-			Password          string `json:"Password"`
-			ClientCredentials string `json:"Client Credentials"`
-			UseIDToken        bool   `json:"Use ID Token"`
+			Type              string          `json:"Type"`
+			GrantType         string          `json:"Grant Type"`
+			TokenURL          string          `json:"Token URL"`
+			AuthURL           string          `json:"Auth URL"`
+			RedirectURL       string          `json:"Redirect URL"`
+			ClientID          string          `json:"Client ID"`
+			ClientSecret      string          `json:"Client Secret"`
+			Scope             string          `json:"Scope"`
+			Username          string          `json:"Username"`
+			Password          string          `json:"Password"`
+			ClientCredentials string          `json:"Client Credentials"`
+			UseIDToken        bool            `json:"Use ID Token"`
+			PKCE              json.RawMessage `json:"PKCE"`
 		} `json:"Auth"`
 	}
 	if err := json.Unmarshal(raw, &sec); err != nil {
@@ -220,9 +221,18 @@ func LoadAuth(planPath, envName string) (map[string]auth.Config, error) {
 			Password:          a.Password,
 			ClientCredentials: a.ClientCredentials,
 			UseIDToken:        a.UseIDToken,
+			PKCE:              pkceEnabled(a.PKCE),
 		}
 	}
 	return out, nil
+}
+
+// pkceEnabled resolves the optional `PKCE` key for an Authorization Code config.
+// PKCE is on by default — an absent key, an object (IntelliJ's `{"Code
+// Challenge Method": "S256"}` form), or an explicit `true` all enable it; only a
+// literal `false` turns it off. (It is ignored for the non-interactive grants.)
+func pkceEnabled(raw json.RawMessage) bool {
+	return strings.TrimSpace(string(raw)) != "false"
 }
 
 // LoadEnvNames returns the environment names declared in the http-client.env.json

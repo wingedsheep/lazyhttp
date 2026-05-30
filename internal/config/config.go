@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // Config holds the preferences carried between runs. Fields are omitempty so an
@@ -57,4 +58,80 @@ func (c Config) Save() error {
 		return err
 	}
 	return os.WriteFile(p, data, 0o644)
+}
+
+// tokensPath returns the OAuth2 refresh-token store location, a sibling of the
+// config file. Refresh tokens are secrets, so they live in their own file
+// (written 0600) rather than in config.json.
+func tokensPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "lazy-http", "tokens.json"), nil
+}
+
+// TokenStore is a file-backed implementation of auth.RefreshStore: it persists
+// Authorization Code refresh tokens to tokens.json (mode 0600) so a browser
+// sign-in survives restarts and the headless runner can renew silently. It is
+// best-effort — a read or write failure degrades gracefully to in-memory only —
+// and safe for concurrent use, since token fetches happen off the UI thread.
+type TokenStore struct {
+	mu     sync.Mutex
+	tokens map[string]string
+	loaded bool
+}
+
+// NewTokenStore returns a lazily-loaded token store.
+func NewTokenStore() *TokenStore { return &TokenStore{} }
+
+// load reads tokens.json once, on first access. A missing or malformed file
+// yields an empty store rather than an error.
+func (s *TokenStore) load() {
+	if s.loaded {
+		return
+	}
+	s.loaded = true
+	s.tokens = map[string]string{}
+	p, err := tokensPath()
+	if err != nil {
+		return
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	_ = json.Unmarshal(data, &s.tokens)
+}
+
+// Get returns the saved refresh token for key, or "" if there is none.
+func (s *TokenStore) Get(key string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.load()
+	return s.tokens[key]
+}
+
+// Put saves refresh under key and rewrites tokens.json. A no-op when the value
+// is unchanged; the write is best-effort.
+func (s *TokenStore) Put(key, refresh string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.load()
+	if s.tokens[key] == refresh {
+		return
+	}
+	s.tokens[key] = refresh
+	p, err := tokensPath()
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return
+	}
+	data, err := json.MarshalIndent(s.tokens, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(p, data, 0o600)
 }

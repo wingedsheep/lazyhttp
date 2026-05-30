@@ -181,6 +181,9 @@ func (m *Model) load() {
 	}
 	m.loadErr = nil
 	m.plan = p
+	// Only the TUI may open a browser, so the Authorization Code grant's
+	// interactive sign-in runs here (the headless runner leaves it off).
+	m.plan.AuthCache.SetInteractive(true)
 	m.bodyView = make([]string, len(p.Steps))
 	m.refreshLabels()
 	if m.cursor >= len(p.Steps) {
@@ -321,11 +324,20 @@ func (m Model) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// authWaitNotice is shown while an Authorization Code step waits for the user to
+// finish the browser sign-in; onResult clears it once the result arrives.
+const authWaitNotice = "Waiting for browser sign-in to complete…"
+
 // onResult stores a finished result and advances a run-from-here chain.
 func (m Model) onResult(msg exec.ResultMsg) (tea.Model, tea.Cmd) {
 	// A terminal ResultMsg ends any active stream (only one runs at a time), so
 	// release the subscription. The StreamDoneMsg path covers cancelled streams.
 	m.streamSub = nil
+	// Clear the "waiting for sign-in" hint now the step has finished (unless a
+	// later action already replaced the notice).
+	if m.notice == authWaitNotice {
+		m.notice = ""
+	}
 	if msg.Index < len(m.plan.Results) {
 		r := m.plan.Evaluate(msg.Index, msg.Result)
 		m.plan.Results[msg.Index] = r
@@ -666,6 +678,14 @@ func (m *Model) run(i int) tea.Cmd {
 	}
 	if i == m.cursor {
 		m.refreshResult()
+	}
+	// An Authorization Code step with no cached or saved token will open a
+	// browser off-thread; flag it so the user knows to complete the sign-in
+	// (the spinner alone wouldn't explain the wait). Cleared once the result
+	// arrives in onResult.
+	if s.Kind == step.KindHTTP && m.plan.NeedsInteractiveLogin(s) {
+		m.notice = authWaitNotice
+		m.noticeOK = false
 	}
 	var cmd tea.Cmd
 	if s.Stream && s.Kind == step.KindHTTP {
