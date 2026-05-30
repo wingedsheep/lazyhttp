@@ -260,6 +260,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
+		// The list glyph re-renders every frame, but the response pane lives in a
+		// viewport whose content is set, not recomputed per frame. Re-render it so
+		// the running/streaming spinner advances in step with the new frame.
+		if m.cursor < len(m.plan.Results) && m.plan.Results[m.cursor].Status == step.Running {
+			if m.cursor == m.streamIndex {
+				m.viewport.SetContent(m.streamView())
+				m.viewport.GotoBottom()
+			} else {
+				m.viewport.SetContent(m.formatResult(m.cursor))
+			}
+		}
 		return m, cmd
 
 	case exec.ResultMsg:
