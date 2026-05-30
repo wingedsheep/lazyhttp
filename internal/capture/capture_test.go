@@ -48,7 +48,7 @@ func TestCheck(t *testing.T) {
 	r := step.Result{
 		StatusCode: 201,
 		Header:     http.Header{"Content-Type": {"application/json"}},
-		Body:       `{"id": 42, "title": "hi"}`,
+		Body:       `{"id": 42, "title": "hi", "price": 9.90}`,
 	}
 
 	cases := []struct {
@@ -69,6 +69,15 @@ func TestCheck(t *testing.T) {
 		// quote tolerance lives in Check now, not the parser
 		{expr: "status", op: "==", want: `"201"`, pass: true},
 
+		// == / != compare numerically when both sides parse as numbers, so a
+		// differently-formatted-but-equal literal still matches (9.90 vs the
+		// stringified 9.9). Equality now agrees with the ordering operators below
+		// on what counts as a number.
+		{expr: "json.price", op: "==", want: "9.90", pass: true},
+		{expr: "json.price", op: "!=", want: "9.90", pass: false},
+		{expr: "json.id", op: "==", want: "0042", pass: true},
+		{expr: "json.title", op: "==", want: "hi", pass: true}, // non-numeric: string compare
+
 		// in: membership over a comma-separated set, whitespace tolerated
 		{expr: "status", op: "in", want: "200,204", pass: false},
 		{expr: "status", op: "in", want: "200, 201, 204", pass: true},
@@ -88,6 +97,9 @@ func TestCheck(t *testing.T) {
 		{expr: "json.title", op: "matches", want: "^bye", pass: false},
 		{expr: "status", op: "matches", want: `\d{3}`, pass: true},
 		{expr: "json.title", op: "matches", want: "(", pass: false}, // invalid regexp
+		// matches unquotes a wrapped operand like every other operator, so a
+		// quoted pattern is the regex itself rather than one matching literal quotes.
+		{expr: "json.title", op: "matches", want: `"^hi$"`, pass: true},
 
 		// negation composes with every operator
 		{expr: "status", op: "in", want: "200,204", neg: true, pass: true},

@@ -87,11 +87,25 @@ func parseSteps(src, dir string, vars Vars, stack []string) ([]step.Step, error)
 	// "\n", so this single pass covers the whole line-oriented parser.
 	src = normalizeNewlines(src)
 	// First pass: collect inline variable definitions so they're available no
-	// matter where in the file a step references them.
+	// matter where in the file a step references them. The raw values are
+	// gathered before any are resolved, so a definition may reference another
+	// regardless of order (`@a = {{b}}` resolves even when `@b` is defined
+	// below it). Expand then follows references transitively through the map and
+	// breaks cycles, so resolving the gathered names in any order yields the same
+	// result.
+	var defined []string
+	seen := map[string]bool{}
 	for _, line := range strings.Split(src, "\n") {
 		if m := varDef.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
-			vars[m[1]] = vars.Expand(strings.TrimSpace(m[2]))
+			if !seen[m[1]] {
+				seen[m[1]] = true
+				defined = append(defined, m[1])
+			}
+			vars[m[1]] = strings.TrimSpace(m[2])
 		}
+	}
+	for _, name := range defined {
+		vars[name] = vars.Expand(vars[name])
 	}
 
 	var (

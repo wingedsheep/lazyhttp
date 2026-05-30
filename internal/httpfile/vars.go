@@ -13,12 +13,16 @@ import (
 	"github.com/wingedsheep/lazyhttp/internal/auth"
 )
 
-// varPattern matches IntelliJ-style placeholders: plain {{host}}, dynamic
+// VarPattern matches IntelliJ-style placeholders: plain {{host}}, dynamic
 // variables with optional args ({{$uuid}}, {{$randomInt 0 9}}), and inline
 // response references ({{login.response.body.$.id}}). It captures any run of
 // non-brace characters between {{ }} and lets Expand decide how to resolve it,
 // so JSON-path punctuation ($ . [ ] *) inside a reference comes through intact.
-var varPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
+//
+// It is the single source of truth for what counts as a placeholder: Expand
+// resolves against it, and runner.Unresolved scans for leftovers with it, so the
+// two can never disagree about nested or malformed braces.
+var VarPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
 
 // Vars holds the resolved variable set for a plan: values defined inline in the
 // .http file (@name = value) layered over values from an environment file.
@@ -381,8 +385,8 @@ func (v Vars) expand(s string, resolve func(token string) (string, bool), seen [
 	if depth >= maxExpandDepth {
 		return s
 	}
-	return varPattern.ReplaceAllStringFunc(s, func(match string) string {
-		token := strings.TrimSpace(varPattern.FindStringSubmatch(match)[1])
+	return VarPattern.ReplaceAllStringFunc(s, func(match string) string {
+		token := strings.TrimSpace(VarPattern.FindStringSubmatch(match)[1])
 		if resolve != nil {
 			if val, ok := resolve(token); ok {
 				return val // terminal: response data is not rescanned
