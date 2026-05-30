@@ -13,6 +13,37 @@ import (
 // fire ~3 events per notch, so this maps roughly one notch to one step.
 const wheelStep = 3
 
+// wheelScroll turns a mouse-wheel event into cursor movement, accumulating
+// sub-notch events in *accum so one physical notch (≈wheelStep events) moves the
+// cursor by exactly one step. A reversal drops any leftover from the other
+// direction so the next notch counts cleanly. move is called once per step with
+// -1 (up) or +1 (down). Non-wheel buttons are ignored. Shared by the step list
+// and the folder browser, which scroll identically.
+func wheelScroll(button tea.MouseButton, accum *int, move func(int)) {
+	switch button {
+	case tea.MouseButtonWheelUp:
+		if *accum > 0 {
+			*accum = 0
+		}
+		*accum--
+	case tea.MouseButtonWheelDown:
+		if *accum < 0 {
+			*accum = 0
+		}
+		*accum++
+	default:
+		return
+	}
+	for *accum <= -wheelStep {
+		move(-1)
+		*accum += wheelStep
+	}
+	for *accum >= wheelStep {
+		move(1)
+		*accum -= wheelStep
+	}
+}
+
 // onMouse routes mouse input. A left click selects the pane under the cursor
 // and, on a step row in the list, runs that step. The scroll wheel scrolls the
 // response body when that pane is focused, otherwise it moves through the list.
@@ -40,30 +71,8 @@ func (m Model) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd
 	}
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		if m.wheelAccum > 0 {
-			m.wheelAccum = 0 // direction flipped; drop leftover from the other way
-		}
-		m.wheelAccum--
-	case tea.MouseButtonWheelDown:
-		if m.wheelAccum < 0 {
-			m.wheelAccum = 0
-		}
-		m.wheelAccum++
-	default:
-		return m, nil
-	}
-	// Only step once a full notch's worth of events has accumulated, so a
-	// single physical scroll tick moves the cursor by one.
-	for m.wheelAccum <= -wheelStep {
-		m.moveCursor(-1)
-		m.wheelAccum += wheelStep
-	}
-	for m.wheelAccum >= wheelStep {
-		m.moveCursor(1)
-		m.wheelAccum -= wheelStep
-	}
+	// Otherwise the wheel moves the list cursor, one step per physical notch.
+	wheelScroll(msg.Button, &m.wheelAccum, m.moveCursor)
 	return m, nil
 }
 
@@ -145,7 +154,9 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// explain why (where we searched, or the parse error) instead of no-op'ing.
 		if len(m.envNames) > 0 {
 			m.envPicking = true
-			m.envCursor = indexOf(m.envOptions(), m.envName)
+			// Open on the current env; -1 (not in the list) falls back to the
+			// first option, the "(none)" entry.
+			m.envCursor = max(indexOf(m.envOptions(), m.envName), 0)
 		} else {
 			m.setNotice(m.envDisc.Summary(), false)
 		}

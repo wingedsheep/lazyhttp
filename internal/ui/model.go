@@ -28,8 +28,22 @@ const (
 //
 // Its behaviour is split across a few files in this package: input.go owns the
 // keyboard/mouse routing and cursor math, env.go the environment picker, copy.go
-// the clipboard copy and the shared notice line. This file holds the struct, the
-// load/run/result lifecycle, and the small caches the renderer reads.
+// the clipboard copy and the shared notice line; the rendering is split by screen
+// region across view.go (status bar, env modal, the root View), layout.go (pane
+// sizing), view_list.go (the step list) and view_result.go (the response pane).
+// This file holds the struct, the load/run/result lifecycle, and the small caches
+// the renderer reads.
+//
+// Receiver convention: Update and the on*/…Key handlers it dispatches to take a
+// value receiver and return the updated Model — Bubble Tea's contract — so they
+// mutate their own local copy and hand it back. The small helpers they call to do
+// that mutation (cursor math, load, refresh*, resetState) take a *pointer*
+// receiver, so their writes reach that same copy. Everything on the render path —
+// View and the methods it calls — takes a value receiver and only reads. The rule
+// of thumb: pointer receiver iff the method mutates, value receiver iff it renders
+// or queries. (Reference fields — the plan, the stream builder, the highlight
+// caches — are pointers, so a value receiver's writes to their *contents* persist
+// through the copy; that is how the render path's lazy caches fill in safely.)
 type Model struct {
 	path    string
 	envName string

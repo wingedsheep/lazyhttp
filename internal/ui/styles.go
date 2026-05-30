@@ -56,7 +56,7 @@ var catppuccin = theme{
 	crust:   adaptive("#181825", "#dce0e8"), // mantle / crust
 }
 
-//                    accent     blue       teal       success    warning    danger     fg         subtle     border     selBg      crust
+/*                    accent     blue       teal       success    warning    danger     fg         subtle     border     selBg      crust */
 var dracula = mono("#bd93f9", "#8be9fd", "#ff79c6", "#50fa7b", "#ffb86c", "#ff5555", "#f8f8f2", "#6272a4", "#44475a", "#44475a", "#21222c")
 var nord = mono("#b48ead", "#81a1c1", "#8fbcbb", "#a3be8c", "#d08770", "#bf616a", "#eceff4", "#616e88", "#434c5e", "#3b4252", "#2e3440")
 var gruvbox = mono("#d3869b", "#83a598", "#8ec07c", "#b8bb26", "#fe8019", "#fb4934", "#ebdbb2", "#928374", "#504945", "#3c3836", "#1d2021")
