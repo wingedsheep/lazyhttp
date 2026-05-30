@@ -133,5 +133,34 @@ func (s *TokenStore) Put(key, refresh string) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(p, data, 0o600)
+	_ = writeFileAtomic(p, data, 0o600)
+}
+
+// writeFileAtomic writes data to a temp file in the destination directory and
+// renames it into place, so a crash or a concurrent run mid-write can never
+// leave a half-written (corrupt) file: a reader sees either the old contents or
+// the complete new ones. The temp file is created in the same directory as the
+// target so the rename stays on one filesystem (and thus atomic). perm is
+// applied before the rename so the secret never exists with looser permissions.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	// Best-effort cleanup if we bail before the rename; a no-op once renamed.
+	defer os.Remove(tmpName)
+
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

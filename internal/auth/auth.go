@@ -75,11 +75,21 @@ type RefreshStore interface {
 type Cache struct {
 	mu          sync.Mutex
 	tokens      map[string]cachedToken
+	inflight    map[string]*tokenCall // fetches in progress, keyed like tokens
 	client      *http.Client
 	now         func() time.Time
 	store       RefreshStore
 	interactive bool
 	openURL     func(string) error
+}
+
+// tokenCall is one in-flight token fetch that concurrent callers for the same
+// key wait on instead of starting their own (which, for the Authorization Code
+// grant, would open a second browser window).
+type tokenCall struct {
+	done chan struct{}
+	tok  cachedToken
+	err  error
 }
 
 type cachedToken struct {
@@ -94,10 +104,11 @@ type cachedToken struct {
 // Authorization Code browser flow opt in via SetInteractive / SetStore.
 func NewCache() *Cache {
 	return &Cache{
-		tokens:  map[string]cachedToken{},
-		client:  &http.Client{Timeout: 30 * time.Second},
-		now:     time.Now,
-		openURL: openBrowser,
+		tokens:   map[string]cachedToken{},
+		inflight: map[string]*tokenCall{},
+		client:   &http.Client{Timeout: 30 * time.Second},
+		now:      time.Now,
+		openURL:  openBrowser,
 	}
 }
 
@@ -271,21 +282,50 @@ func cacheKey(id string, c Config) string {
 
 // token returns a cached token for key, fetching a new one when the cache is
 // empty or the cached token has expired.
+//
+// The fetch (a back-channel POST, or the up-to-3-minute interactive browser
+// round-trip for the Authorization Code grant) runs WITHOUT c.mu held, so a
+// slow sign-in for one configuration doesn't block resolving every other
+// configuration. Concurrent callers for the same key join a single in-flight
+// fetch rather than starting their own — so one plan never opens two browser
+// windows for the same login.
 func (c *Cache) token(key string, cfg Config) (cachedToken, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
+	// Fast path: a live cached token.
 	if tok, ok := c.tokens[key]; ok {
 		if tok.expiry.IsZero() || c.now().Before(tok.expiry) {
+			c.mu.Unlock()
 			return tok, nil
 		}
 	}
-	tok, err := c.obtain(key, cfg)
-	if err != nil {
-		return cachedToken{}, err
+
+	// A fetch for this key is already running: wait for it instead of starting
+	// a duplicate.
+	if call, ok := c.inflight[key]; ok {
+		c.mu.Unlock()
+		<-call.done
+		return call.tok, call.err
 	}
-	c.tokens[key] = tok
-	return tok, nil
+
+	// We own the fetch for this key. Publish the in-flight call, then release
+	// the lock for the duration of the (possibly slow) fetch.
+	call := &tokenCall{done: make(chan struct{})}
+	c.inflight[key] = call
+	c.mu.Unlock()
+
+	tok, err := c.obtain(key, cfg)
+
+	c.mu.Lock()
+	if err == nil {
+		c.tokens[key] = tok
+	}
+	delete(c.inflight, key)
+	c.mu.Unlock()
+
+	call.tok, call.err = tok, err
+	close(call.done)
+	return tok, err
 }
 
 // obtain fetches a fresh token for a cache miss. The back-channel grants

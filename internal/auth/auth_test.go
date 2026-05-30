@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -455,6 +456,108 @@ func TestBuildAuthURLPreservesExistingParams(t *testing.T) {
 	if q.Get("code_challenge") == "" {
 		t.Error("expected a PKCE code_challenge")
 	}
+}
+
+func TestConcurrentFetchSingleFlight(t *testing.T) {
+	// A token endpoint that blocks until released, so several concurrent callers
+	// for the same key pile up on a single in-flight fetch rather than each
+	// firing their own (which, for the browser grant, would open N windows).
+	release := make(chan struct{})
+	hit := make(chan struct{}, 1)
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		select {
+		case hit <- struct{}{}:
+		default:
+		}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"access_token":"tok","expires_in":3600}`))
+	}))
+	defer srv.Close()
+
+	cache := NewCache()
+	r := NewResolver(map[string]Config{"api": {GrantType: "Client Credentials", TokenURL: srv.URL, ClientID: "id"}}, cache)
+
+	const n = 6
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			s := &step.Step{Headers: map[string]string{"A": `{{$auth.token("api")}}`}}
+			errs[i] = r.Resolve(s)
+		}(i)
+	}
+
+	// Once the endpoint is hit, the owning goroutine holds the in-flight slot;
+	// give the others a moment to coalesce onto it, then let the fetch finish.
+	<-hit
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("resolve %d: %v", i, err)
+		}
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("expected a single token fetch for %d concurrent callers, got %d", n, got)
+	}
+}
+
+func TestSlowFetchDoesNotBlockOtherKeys(t *testing.T) {
+	// A slow sign-in for one configuration must not hold the cache lock and
+	// block resolving a different configuration.
+	release := make(chan struct{})
+	slowHit := make(chan struct{}, 1)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case slowHit <- struct{}{}:
+		default:
+		}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"access_token":"slow","expires_in":3600}`))
+	}))
+	defer slow.Close()
+	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"access_token":"fast","expires_in":3600}`))
+	}))
+	defer fast.Close()
+
+	cache := NewCache()
+	r := NewResolver(map[string]Config{
+		"slow": {GrantType: "Client Credentials", TokenURL: slow.URL, ClientID: "a"},
+		"fast": {GrantType: "Client Credentials", TokenURL: fast.URL, ClientID: "b"},
+	}, cache)
+
+	go func() {
+		s := &step.Step{Headers: map[string]string{"A": `{{$auth.token("slow")}}`}}
+		_ = r.Resolve(s)
+	}()
+	<-slowHit // the slow fetch is now in progress
+
+	done := make(chan error, 1)
+	go func() {
+		s := &step.Step{Headers: map[string]string{"A": `{{$auth.token("fast")}}`}}
+		done <- r.Resolve(s)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("fast resolve: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("a fast key blocked behind a slow fetch — the cache lock is held across the fetch")
+	}
+	close(release)
 }
 
 func TestReferences(t *testing.T) {
