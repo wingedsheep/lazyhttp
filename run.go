@@ -222,8 +222,9 @@ func buildStepReport(plan *runner.Plan, i int, r step.Result) stepReport {
 		sr.Status = "error: " + r.Err.Error()
 	}
 
+	eval := capture.For(r)
 	for _, c := range s.Captures {
-		if val, ok := capture.Eval(c.Expr, r); ok {
+		if val, ok := eval.Eval(c.Expr); ok {
 			if sr.Captures == nil {
 				sr.Captures = make(map[string]string)
 			}

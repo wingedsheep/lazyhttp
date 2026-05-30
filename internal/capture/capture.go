@@ -13,8 +13,37 @@ import (
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
 
-// Eval resolves a capture expression against a result and returns the value as
-// a string. Supported expressions:
+// Eval resolves a capture expression against a result. It is a single-shot
+// convenience over For(r).Eval; evaluating several expressions against the same
+// result is cheaper through a shared Evaluator (see For), which parses the JSON
+// body only once.
+func Eval(expr string, r step.Result) (value string, ok bool) {
+	return For(r).Eval(expr)
+}
+
+// Check evaluates one assertion against a result, the single-shot counterpart to
+// For(r).Check.
+func Check(a step.Assertion, r step.Result) step.AssertOutcome {
+	return For(r).Check(a)
+}
+
+// Evaluator resolves capture and assertion expressions against one result,
+// parsing its JSON body at most once no matter how many JSON-path expressions
+// are evaluated. A step's captures and assertions — or several inline
+// {{name.response...}} references to the same response — share one Evaluator so
+// the body is unmarshalled a single time instead of per expression.
+type Evaluator struct {
+	r       step.Result
+	doc     any  // the parsed JSON body, valid once decoded && docOK
+	docOK   bool // whether the body parsed as JSON
+	decoded bool // whether decoding has been attempted yet
+}
+
+// For returns an Evaluator bound to result r.
+func For(r step.Result) *Evaluator { return &Evaluator{r: r} }
+
+// Eval resolves a capture expression against the bound result and returns the
+// value as a string. Supported expressions:
 //
 //	status            the HTTP status code (or shell exit code)
 //	header.Name       a response header value
@@ -22,34 +51,38 @@ import (
 //	json.a.b[0].c     a path into the JSON body ("$." and a bare path also work)
 //
 // ok is false when the path can't be resolved (e.g. missing JSON key).
-func Eval(expr string, r step.Result) (value string, ok bool) {
+func (e *Evaluator) Eval(expr string) (value string, ok bool) {
 	expr = strings.TrimSpace(expr)
 	switch {
 	case expr == "status":
-		if r.StatusCode != 0 {
-			return strconv.Itoa(r.StatusCode), true
+		if e.r.StatusCode != 0 {
+			return strconv.Itoa(e.r.StatusCode), true
 		}
-		return strconv.Itoa(r.ExitCode), true
+		return strconv.Itoa(e.r.ExitCode), true
 	case expr == "body":
-		return r.Body, true
+		return e.r.Body, true
 	case strings.HasPrefix(expr, "header."):
 		name := strings.TrimPrefix(expr, "header.")
-		if r.Header == nil {
+		if e.r.Header == nil {
 			return "", false
 		}
-		v := r.Header.Get(name)
+		v := e.r.Header.Get(name)
 		return v, v != ""
 	default:
-		return jsonPath(r.Body, expr)
+		doc, ok := e.json()
+		if !ok {
+			return "", false
+		}
+		return walkJSON(doc, expr)
 	}
 }
 
-// Check evaluates an assertion against a result. The left-hand expression is
-// resolved like a capture, then compared per the operator. A "not" prefix
-// (a.Negated) inverts the operator's verdict — except for an unknown operator,
-// which never passes regardless of negation.
-func Check(a step.Assertion, r step.Result) step.AssertOutcome {
-	got, found := Eval(a.Expr, r)
+// Check evaluates an assertion against the bound result. The left-hand
+// expression is resolved like a capture, then compared per the operator. A "not"
+// prefix (a.Negated) inverts the operator's verdict — except for an unknown
+// operator, which never passes regardless of negation.
+func (e *Evaluator) Check(a step.Assertion) step.AssertOutcome {
+	got, found := e.Eval(a.Expr)
 	out := step.AssertOutcome{Assertion: a, Got: got}
 	pass, detail, known := evalOp(a.Op, a.Want, got, found)
 	if !known {
@@ -59,6 +92,20 @@ func Check(a step.Assertion, r step.Result) step.AssertOutcome {
 	out.Pass = pass != a.Negated
 	out.Detail = detail
 	return out
+}
+
+// json returns the bound result's body parsed as a JSON document, unmarshalling
+// it on the first call and reusing the result thereafter. ok is false when the
+// body isn't valid JSON.
+func (e *Evaluator) json() (doc any, ok bool) {
+	if !e.decoded {
+		e.decoded = true
+		var parsed any
+		if json.Unmarshal([]byte(e.r.Body), &parsed) == nil {
+			e.doc, e.docOK = parsed, true
+		}
+	}
+	return e.doc, e.docOK
 }
 
 // evalOp applies one assertion operator, returning its verdict before any
@@ -154,17 +201,14 @@ func unquote(s string) string {
 	return s
 }
 
-// jsonPath walks a dotted/bracketed path into a JSON document.
-func jsonPath(body, path string) (string, bool) {
+// walkJSON walks a dotted/bracketed path into an already-decoded JSON document.
+// Decoding is the Evaluator's job (so a body is parsed once across many paths);
+// this stays a pure walk over the result.
+func walkJSON(doc any, path string) (string, bool) {
 	path = strings.TrimPrefix(path, "json.")
 	path = strings.TrimPrefix(path, "$.")
 	path = strings.TrimPrefix(path, "$")
 	path = strings.TrimPrefix(path, ".")
-
-	var doc any
-	if err := json.Unmarshal([]byte(body), &doc); err != nil {
-		return "", false
-	}
 
 	cur := doc
 	for _, tok := range tokenize(path) {

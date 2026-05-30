@@ -42,6 +42,17 @@ func TestEval(t *testing.T) {
 			t.Errorf("Eval(%q) = (%q, %v), want (%q, %v)", c.expr, got, ok, c.want, c.ok)
 		}
 	}
+
+	// A single Evaluator reused across many expressions (the runner's hot path,
+	// where it parses the body once) must yield the same results as the
+	// single-shot Eval calls above.
+	eval := For(r)
+	for _, c := range cases {
+		got, ok := eval.Eval(c.expr)
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("For(r).Eval(%q) = (%q, %v), want (%q, %v)", c.expr, got, ok, c.want, c.ok)
+		}
+	}
 }
 
 func TestCheck(t *testing.T) {

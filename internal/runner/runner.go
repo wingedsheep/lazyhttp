@@ -108,6 +108,13 @@ type Plan struct {
 	// file's modtime and size are unchanged, so an edit on disk is still picked
 	// up before the next expand.
 	bodyFileCache map[string]bodyFileEntry
+
+	// nameSteps maps a step name to the indices of steps carrying it, in
+	// descending order, so LastResult can jump to the candidates by name instead
+	// of scanning every step per inline {{name.response...}} reference (Expand
+	// resolves each such ref, so a step with several refs was O(steps×refs)). It
+	// is derived from the immutable Steps slice and built lazily on first use.
+	nameSteps map[string][]int
 }
 
 // bodyFileEntry is one memoized `< file` body together with the stat signature
@@ -357,11 +364,19 @@ func (p *Plan) ResolveResponseRef(token string) (string, bool) {
 }
 
 // LastResult returns the result of the most recently positioned step named name
-// that has already run. Scanning from the bottom means a reference picks up the
-// latest result when a name is reused across the plan.
+// that has already run. The name index is ordered bottom-to-top, so the first
+// run candidate is the latest result when a name is reused across the plan.
 func (p *Plan) LastResult(name string) (step.Result, bool) {
-	for i := len(p.Steps) - 1; i >= 0; i-- {
-		if p.Steps[i].Name == name && i < len(p.Results) && p.Results[i].Status != step.Pending {
+	if p.nameSteps == nil {
+		// Steps never change after Load, so this index is built once and reused.
+		p.nameSteps = make(map[string][]int)
+		for i := len(p.Steps) - 1; i >= 0; i-- {
+			n := p.Steps[i].Name
+			p.nameSteps[n] = append(p.nameSteps[n], i)
+		}
+	}
+	for _, i := range p.nameSteps[name] {
+		if i < len(p.Results) && p.Results[i].Status != step.Pending {
 			return p.Results[i], true
 		}
 	}
@@ -375,8 +390,11 @@ func (p *Plan) Evaluate(i int, r step.Result) step.Result {
 	if r.Err != nil {
 		return r
 	}
+	// One Evaluator for this result so its JSON body is parsed once across every
+	// capture and assertion path, not re-unmarshalled per expression.
+	eval := capture.For(r)
 	for _, c := range p.Steps[i].Captures {
-		if val, ok := capture.Eval(c.Expr, r); ok {
+		if val, ok := eval.Eval(c.Expr); ok {
 			p.Vars[c.Name] = val
 		}
 	}
@@ -386,7 +404,7 @@ func (p *Plan) Evaluate(i int, r step.Result) step.Result {
 		// after captures above, so a value captured by this same step is visible.
 		// Want's original template survives in a.Raw, which is what the UI shows.
 		a.Want = p.Vars.ExpandFunc(a.Want, p.ResolveResponseRef)
-		r.Asserts = append(r.Asserts, capture.Check(a, r))
+		r.Asserts = append(r.Asserts, eval.Check(a))
 	}
 	return r
 }
