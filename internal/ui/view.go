@@ -260,16 +260,43 @@ func (m Model) renderList() string {
 		return header + "\n" + m.styles.dim.Render(truncate(msg, innerW))
 	}
 
-	// Render the body as individual lines (group headings plus step rows),
-	// remembering the line index of the selected row.
-	var lines []string
-	cursorLine := 0
+	// Build the windowed (group-heading + step) rows once, then render each:
+	// a group-heading row prints its name, a step row defers to renderRow.
+	rows := m.windowRows(m.listRows())
+	lines := make([]string, len(rows))
+	for j, r := range rows {
+		if r.step < 0 {
+			lines[j] = m.styles.group.Render("▌ " + truncate(r.group, innerW-2))
+		} else {
+			lines[j] = m.renderRow(r.step, r.conn, innerW)
+		}
+	}
+
+	return header + "\n" + strings.Join(lines, "\n")
+}
+
+// listRow describes one body row of the step list: a group heading (step == -1,
+// carrying the heading text) or a step row (step >= 0, carrying its tree
+// connector). renderList draws these rows and listLineSteps reads their step
+// indices, so both views of the list derive from one source.
+type listRow struct {
+	step  int    // absolute step index, or -1 for a group-heading row
+	group string // heading text, set only on a group-heading row
+	conn  string // tree connector for a grouped step row, "" otherwise
+}
+
+// listRows builds the full (pre-window) sequence of body rows for the step list
+// — group headings interleaved with their step rows — and reports the row index
+// of the selected step so the window can keep it in view.
+func (m Model) listRows() (rows []listRow, cursorLine int) {
+	vis := m.visible()
+	rows = make([]listRow, 0, len(vis))
 	group := ""
 	for p, i := range vis {
 		if g := m.plan.Steps[i].Group; g != group {
 			group = g
 			if group != "" {
-				lines = append(lines, m.styles.group.Render("▌ "+truncate(group, innerW-2)))
+				rows = append(rows, listRow{step: -1, group: group})
 			}
 		}
 		// Tree connector: the last visible step of a group elbows, the rest tee.
@@ -282,21 +309,23 @@ func (m Model) renderList() string {
 			}
 		}
 		if i == m.cursor {
-			cursorLine = len(lines)
+			cursorLine = len(rows)
 		}
-		lines = append(lines, m.renderRow(i, conn, innerW))
+		rows = append(rows, listRow{step: i, conn: conn})
 	}
+	return rows, cursorLine
+}
 
-	// Scroll a window of the body that keeps the cursor in view and never spills
-	// past the pane's content area (two rows go to the STEPS header). Without
-	// this a long plan grows the pane taller than the terminal, scrolling the
-	// status bar off the top of the alt-screen.
-	if budget := max(m.contentH-2, 1); len(lines) > budget {
-		start := clamp(cursorLine-budget/2, 0, len(lines)-budget)
-		lines = lines[start : start+budget]
+// windowRows scrolls the body rows so the selected one (at cursorLine) stays in
+// view and the list never spills past the pane's content area (two rows go to
+// the STEPS header). Without this a long plan grows the pane taller than the
+// terminal, scrolling the status bar off the top of the alt-screen.
+func (m Model) windowRows(rows []listRow, cursorLine int) []listRow {
+	if budget := max(m.contentH-2, 1); len(rows) > budget {
+		start := clamp(cursorLine-budget/2, 0, len(rows)-budget)
+		rows = rows[start : start+budget]
 	}
-
-	return header + "\n" + strings.Join(lines, "\n")
+	return rows
 }
 
 // listBodyTop is the screen row (0-based) where the step list's first body row
@@ -306,29 +335,14 @@ const listBodyTop = 4
 
 // listLineSteps returns, for each body row currently drawn in the step list
 // (after the same windowing renderList applies), the absolute step index shown
-// there, or -1 for a group-heading row. It mirrors renderList's group/window
-// logic so a mouse click can map a screen row back to a step — keep the two in
-// sync.
+// there, or -1 for a group-heading row, so a mouse click can map a screen row
+// back to a step. It shares listRows/windowRows with renderList, so the drawn
+// rows and this hit-test can't drift apart.
 func (m Model) listLineSteps() []int {
-	vis := m.visible()
-	steps := make([]int, 0, len(vis))
-	cursorLine := 0
-	group := ""
-	for _, i := range vis {
-		if g := m.plan.Steps[i].Group; g != group {
-			group = g
-			if group != "" {
-				steps = append(steps, -1) // a group-heading row maps to no step
-			}
-		}
-		if i == m.cursor {
-			cursorLine = len(steps)
-		}
-		steps = append(steps, i)
-	}
-	if budget := max(m.contentH-2, 1); len(steps) > budget {
-		start := clamp(cursorLine-budget/2, 0, len(steps)-budget)
-		steps = steps[start : start+budget]
+	rows := m.windowRows(m.listRows())
+	steps := make([]int, len(rows))
+	for j, r := range rows {
+		steps[j] = r.step
 	}
 	return steps
 }
