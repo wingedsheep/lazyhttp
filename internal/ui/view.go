@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -544,6 +545,19 @@ func requestOpts(s step.Step) string {
 	return "⚙ " + strings.Join(opts, " · ")
 }
 
+// sortedKeys returns a map's keys in alphabetical order. Headers live in maps
+// (request: map[string]string, response: http.Header), whose iteration order is
+// randomised, so the request preview and response headers shuffled on every
+// re-render. Sorting gives a stable, scannable display.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // formatResult builds the full request+response text for step i, with all
 // {{vars}} expanded against the current variable set so the preview matches
 // what will actually run.
@@ -563,8 +577,8 @@ func (m Model) formatResult(i int) string {
 		} else {
 			b.WriteString(m.styles.method.Foreground(palette.accent).
 				Render(s.Method) + " " + s.URL + "\n")
-			for k, v := range s.Headers {
-				b.WriteString(m.styles.dim.Render(k+": "+v) + "\n")
+			for _, k := range sortedKeys(s.Headers) {
+				b.WriteString(m.styles.dim.Render(k+": "+s.Headers[k]) + "\n")
 			}
 			if opts := requestOpts(s); opts != "" {
 				b.WriteString(m.styles.dim.Render(opts) + "\n")
@@ -617,8 +631,8 @@ func (m Model) formatResult(i int) string {
 		}
 		// Response headers are detail, hidden unless toggled with `h`.
 		if m.showHeaders && s.Kind == step.KindHTTP {
-			for k, v := range r.Header {
-				b.WriteString(m.styles.dim.Render(k+": "+strings.Join(v, ", ")) + "\n")
+			for _, k := range sortedKeys(r.Header) {
+				b.WriteString(m.styles.dim.Render(k+": "+strings.Join(r.Header[k], ", ")) + "\n")
 			}
 		}
 		b.WriteString("\n" + m.cachedBody(i, r))
