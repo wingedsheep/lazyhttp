@@ -71,6 +71,32 @@ func TestVarsNotExpandedAtParse(t *testing.T) {
 	}
 }
 
+func TestParseRequestLine(t *testing.T) {
+	// Method defaults to GET, is upper-cased, and a bare URL (with or without a
+	// trailing version token) is read as the URL rather than mistaken for a method.
+	cases := []struct {
+		line                string
+		wantMethod, wantURL string
+	}{
+		{"GET /items", "GET", "/items"},
+		{"post /items", "POST", "/items"},
+		{"https://x.com/items", "GET", "https://x.com/items"},
+		{"https://x.com/items HTTP/1.1", "GET", "https://x.com/items"},
+		{"{{host}}/items HTTP/1.1", "GET", "{{host}}/items"},
+		{"DELETE https://x.com/items HTTP/2", "DELETE", "https://x.com/items"},
+	}
+	for _, tc := range cases {
+		steps := Parse("### r\n"+tc.line+"\n", Vars{})
+		if len(steps) != 1 {
+			t.Fatalf("%q: want 1 step, got %d", tc.line, len(steps))
+		}
+		if steps[0].Method != tc.wantMethod || steps[0].URL != tc.wantURL {
+			t.Errorf("%q: got %s %q, want %s %q",
+				tc.line, steps[0].Method, steps[0].URL, tc.wantMethod, tc.wantURL)
+		}
+	}
+}
+
 const grouped = `### List
 # @group Posts
 GET /posts

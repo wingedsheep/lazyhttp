@@ -206,7 +206,9 @@ func TestEnvPickerFitsTerminal(t *testing.T) {
 // newModel builds a Model wired to the given plan, for the chain/reset wiring
 // tests that drive onResult directly (no Bubble Tea harness).
 func newModel(p *runner.Plan, runFrom int) Model {
-	return Model{plan: p, runFrom: runFrom, streamIndex: -1, streamBody: &strings.Builder{}}
+	m := Model{plan: p, runFrom: runFrom, streamIndex: -1, streamBody: &strings.Builder{}}
+	m.refilter() // populate the visible-step cache, as New does via load
+	return m
 }
 
 // TestStepAtRow checks the mouse hit-testing maps screen rows to steps, skipping

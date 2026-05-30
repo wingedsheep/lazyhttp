@@ -88,6 +88,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case msg.Type == tea.KeyEsc:
 		if m.filter != "" {
 			m.filter = ""
+			m.refilter()
 			m.snapCursor()
 			m.refreshResult()
 		}
@@ -212,6 +213,7 @@ func (m Model) filterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEsc:
 		m.filtering = false
 		m.filter = ""
+		m.refilter()
 		m.snapCursor()
 		m.refreshResult()
 		return m, nil
@@ -235,6 +237,7 @@ func (m Model) filterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
+	m.refilter()
 	m.snapCursor()
 	m.refreshResult()
 	return m, nil
@@ -279,21 +282,27 @@ func (m *Model) setCursor(i int) {
 }
 
 // visible returns the absolute indices of steps that pass the active filter, in
-// order. With no filter every step is visible.
+// order. It reads the cache refilter() maintains; with no filter every step is
+// visible.
 func (m Model) visible() []int {
-	out := make([]int, 0, len(m.plan.Steps))
+	return m.vis
+}
+
+// refilter rebuilds the cached visible-step set. Call it whenever the filter or
+// the display names change (see refreshLabels and the filter keys).
+func (m *Model) refilter() {
+	m.vis = m.vis[:0]
 	q := strings.ToLower(m.filter)
 	for i, s := range m.plan.Steps {
 		if q == "" {
-			out = append(out, i)
+			m.vis = append(m.vis, i)
 			continue
 		}
 		hay := strings.ToLower(s.Method + " " + m.names[i] + " " + s.Group)
 		if strings.Contains(hay, q) {
-			out = append(out, i)
+			m.vis = append(m.vis, i)
 		}
 	}
-	return out
 }
 
 // snapCursor keeps the cursor on a visible step after the filter changes,
