@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -33,8 +34,12 @@ func TestTokenStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat tokens.json: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("tokens.json mode = %o, want 600", perm)
+	// Windows doesn't carry Unix permission bits (Go reports 0666 regardless),
+	// so the 0600 guarantee is only meaningful — and only checkable — elsewhere.
+	if runtime.GOOS != "windows" {
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("tokens.json mode = %o, want 600", perm)
+		}
 	}
 
 	// The atomic write must not leave its temp file behind.
