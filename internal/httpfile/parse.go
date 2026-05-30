@@ -260,42 +260,28 @@ func applyDirective(s *step.Step, directive string) {
 }
 
 // parseTimeout reads a `@timeout` argument into a Duration. It accepts the
-// IntelliJ space-separated form (`30 s`, `500 ms`, `2 m`), the combined form
-// (`30s`), and a bare number (defaulting to seconds). Recognized units are
-// `ms`, `s`, and `m`; anything else, or a non-positive number, returns ok=false
-// so the directive is ignored and the shared 30s timeout stands.
+// IntelliJ space-separated form (`30 s`, `500 ms`, `2 m`), every combined form
+// time.ParseDuration understands (`30s`, `1.5s`, `1h`, `500ms`), and a bare
+// number (defaulting to seconds). Anything unparseable, or a non-positive
+// duration, returns ok=false so the directive is ignored and the shared 30s
+// timeout stands.
 func parseTimeout(arg string) (time.Duration, bool) {
-	fields := strings.Fields(arg)
-	var num, unit string
-	switch len(fields) {
-	case 0:
-		return 0, false
-	case 1:
-		// "30s" → split digits from unit; "30" → bare number (seconds below).
-		f := fields[0]
-		i := strings.IndexFunc(f, func(r rune) bool { return r < '0' || r > '9' })
-		if i < 0 {
-			num, unit = f, "s"
-		} else {
-			num, unit = f[:i], f[i:]
-		}
-	default:
-		num, unit = fields[0], fields[1]
-	}
-	n, err := strconv.Atoi(num)
-	if err != nil || n <= 0 {
+	// IntelliJ writes the unit space-separated ("30 s"); Go wants it attached
+	// ("30s"). Collapse all whitespace so both spellings funnel through the one
+	// parser, which also covers fractional and hour forms ("1.5s", "1h").
+	s := strings.Join(strings.Fields(arg), "")
+	if s == "" {
 		return 0, false
 	}
-	switch strings.ToLower(unit) {
-	case "ms":
-		return time.Duration(n) * time.Millisecond, true
-	case "s":
-		return time.Duration(n) * time.Second, true
-	case "m":
-		return time.Duration(n) * time.Minute, true
-	default:
+	// A bare number ("15") carries no unit; default it to seconds, as IntelliJ does.
+	if _, err := strconv.ParseFloat(s, 64); err == nil {
+		s += "s"
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
 		return 0, false
 	}
+	return d, true
 }
 
 // parseBodyRef reads an IntelliJ "input file" body line: `< path` sends the

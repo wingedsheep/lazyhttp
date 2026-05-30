@@ -105,6 +105,17 @@ func runCommand(args []string, out, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "no steps match filter %q\n", *filter)
 	}
 
+	// Stream a line per step to stderr as the run proceeds, so a long plan shows
+	// progress instead of going silent until the final report. It goes to stderr
+	// (never the stdout report) and is suppressed by --quiet.
+	if !*quiet {
+		ran := 0
+		plan.OnStepStart = func(i int) {
+			ran++
+			fmt.Fprintf(errOut, "[%d/%d] %s %s\n", ran, eligible, stepMethod(plan, i), plan.Label(i))
+		}
+	}
+
 	plan.Run(context.Background(), include)
 	rep := buildReport(plan, include, eligible)
 
@@ -204,7 +215,7 @@ func buildStepReport(plan *runner.Plan, i int, r step.Result) stepReport {
 		// the URL may no longer resolve and are left as-is.
 		sr.URL = plan.Vars.Expand(s.URL)
 		sr.StatusCode = r.StatusCode
-		sr.Status = fmt.Sprintf("%d %s", r.StatusCode, http.StatusText(r.StatusCode))
+		sr.Status = httpStatus(r.StatusCode)
 	}
 	if r.Err != nil {
 		sr.Error = r.Err.Error()
@@ -228,6 +239,26 @@ func buildStepReport(plan *runner.Plan, i int, r step.Result) stepReport {
 		})
 	}
 	return sr
+}
+
+// stepMethod is the verb shown for a step in progress lines and reports: its
+// HTTP method, or "SHELL" for a shell step, which has no method of its own.
+func stepMethod(plan *runner.Plan, i int) string {
+	if plan.Steps[i].Kind == step.KindShell {
+		return "SHELL"
+	}
+	return plan.Steps[i].Method
+}
+
+// httpStatus renders an HTTP status line. For a standard code it reads
+// "200 OK"; for a non-standard one (http.StatusText returns "" for those) it
+// drops the empty reason phrase, so the report shows "299" rather than a
+// dangling "299 ".
+func httpStatus(code int) string {
+	if text := http.StatusText(code); text != "" {
+		return fmt.Sprintf("%d %s", code, text)
+	}
+	return fmt.Sprintf("%d", code)
 }
 
 // useColor reports whether to colourize pretty output: only when out is a real

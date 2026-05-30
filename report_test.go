@@ -84,6 +84,48 @@ func TestWriteJUnit(t *testing.T) {
 	}
 }
 
+func TestHTTPStatus(t *testing.T) {
+	cases := map[int]string{
+		200: "200 OK",
+		404: "404 Not Found",
+		299: "299", // non-standard: no reason phrase, and no dangling space
+		0:   "0",
+	}
+	for code, want := range cases {
+		if got := httpStatus(code); got != want {
+			t.Errorf("httpStatus(%d) = %q, want %q", code, got, want)
+		}
+	}
+}
+
+// TestWriteJUnitSanitizesControlBytes verifies a failure body carrying control
+// bytes (as a binary response would) still yields XML a parser accepts: the
+// illegal bytes are dropped while tab/newline survive.
+func TestWriteJUnitSanitizesControlBytes(t *testing.T) {
+	rep := runReport{
+		OK: false, Failed: 1, Steps: []stepReport{{
+			Name: "binary", Kind: "http", Method: "GET", OK: false,
+			Status: "500 Internal Server Error",
+			Error:  "boom\x00\x01\x08\x1f\tok\nline", // NUL and friends, plus legal tab/newline
+		}},
+	}
+
+	var b strings.Builder
+	writeJUnit(&b, rep, "plan.http")
+
+	var doc junitSuites
+	if err := xml.Unmarshal([]byte(b.String()), &doc); err != nil {
+		t.Fatalf("output is not valid XML: %v\n%q", err, b.String())
+	}
+	body := doc.Suites[0].Cases[0].Failure.Body
+	if strings.ContainsAny(body, "\x00\x01\x08\x1f") {
+		t.Errorf("control bytes survived sanitization: %q", body)
+	}
+	if !strings.Contains(body, "\tok\nline") {
+		t.Errorf("tab/newline should be preserved: %q", body)
+	}
+}
+
 func TestWritePretty(t *testing.T) {
 	var plain strings.Builder
 	writePretty(&plain, fixedReport(), false, false)

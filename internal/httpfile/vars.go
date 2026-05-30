@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/wingedsheep/lazyhttp/internal/auth"
@@ -145,10 +146,11 @@ func loadEnvFile(planPath string) (map[string]map[string]json.RawMessage, error)
 }
 
 // LoadEnv reads an IntelliJ-style http-client.env.json sitting next to the plan
-// and returns the string variables for the named environment. Non-string values
-// (such as the `Security` OAuth2 block, consumed by LoadAuth) are skipped. A
-// missing file or empty env name yields an empty (but usable) set rather than an
-// error.
+// and returns the variables for the named environment. Scalar values are
+// rendered as strings (see scalarString) so `{{port}}` resolves whether the env
+// file writes 8080 or "8080"; composite values — the `Security` OAuth2 block
+// (an object, consumed by LoadAuth), arrays, and null — are skipped. A missing
+// file or empty env name yields an empty (but usable) set rather than an error.
 func LoadEnv(planPath, envName string) (Vars, error) {
 	v := Vars{}
 	if envName == "" {
@@ -159,12 +161,35 @@ func LoadEnv(planPath, envName string) (Vars, error) {
 		return nil, err
 	}
 	for k, raw := range envs[envName] {
-		var s string
-		if json.Unmarshal(raw, &s) == nil {
+		if s, ok := scalarString(raw); ok {
 			v[k] = s
 		}
 	}
 	return v, nil
+}
+
+// scalarString renders a raw JSON env value as a string when it is a scalar — a
+// string, number, or boolean — and reports ok=false for objects, arrays, and
+// null. This lets a numeric or boolean setting (`"port": 8080`, `"debug": true`)
+// fill a {{var}} instead of being silently dropped, while keeping composite
+// values like the `Security` block out of the plain variable set.
+func scalarString(raw json.RawMessage) (string, bool) {
+	var val any
+	if json.Unmarshal(raw, &val) != nil {
+		return "", false
+	}
+	switch t := val.(type) {
+	case string:
+		return t, true
+	case bool:
+		return strconv.FormatBool(t), true
+	case float64:
+		// encoding/json decodes every number as float64; render it without a
+		// trailing ".0" so {{port}} becomes "8080", not "8080.000000".
+		return strconv.FormatFloat(t, 'f', -1, 64), true
+	default:
+		return "", false // object, array, or null
+	}
 }
 
 // LoadAuth reads the OAuth2 configurations from the named environment's

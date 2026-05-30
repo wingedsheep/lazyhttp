@@ -105,13 +105,15 @@ func writeJUnit(out io.Writer, rep runReport, planPath string) {
 	}
 	for _, s := range rep.Steps {
 		c := junitCase{
-			Name:      s.Method + " " + s.Name,
+			Name:      xmlSafe(s.Method + " " + s.Name),
 			Classname: filepath.Base(planPath),
 			Time:      fmt.Sprintf("%.3f", float64(s.DurationMs)/1000),
 		}
 		if !s.OK {
 			msg, body := failureSummary(s)
-			c.Failure = &junitFailure{Message: msg, Body: body}
+			// A failed step's body can echo the response — which may be binary —
+			// so scrub characters illegal in XML before they reach the document.
+			c.Failure = &junitFailure{Message: xmlSafe(msg), Body: xmlSafe(body)}
 		}
 		suite.Cases = append(suite.Cases, c)
 	}
@@ -156,3 +158,20 @@ func assertReason(a assertReport) string {
 }
 
 func ms(d int64) string { return fmt.Sprintf("%dms", d) }
+
+// xmlSafe drops characters that are illegal in XML 1.0, so a step whose response
+// body contains binary or control bytes still produces a JUnit file CI parsers
+// accept. Tab, newline, and carriage return are kept; the other C0 controls,
+// lone UTF-16 surrogate halves, and the non-characters U+FFFE/U+FFFF are removed.
+func xmlSafe(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t' || r == '\n' || r == '\r':
+			return r
+		case r < 0x20, r >= 0xD800 && r <= 0xDFFF, r == 0xFFFE, r == 0xFFFF:
+			return -1 // drop
+		default:
+			return r
+		}
+	}, s)
+}
