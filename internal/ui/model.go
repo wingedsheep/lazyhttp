@@ -56,6 +56,18 @@ type Model struct {
 	// (reload, clear, env switch) can Cancel the request mid-stream.
 	streamSub *exec.StreamSub
 
+	// Live-stream rendering state. streamIndex is the step a `# @stream` response
+	// is arriving for (−1 when nothing streams); streamBody accumulates that body
+	// in a Builder (appending is amortised O(1), where re-concatenating into the
+	// step's Result.Body was O(n) per chunk → quadratic over a long token stream);
+	// streamHead caches the request-preview prefix shown above it. A chunk renders
+	// streamHead + streamBody directly (see streamView), bypassing formatResult's
+	// per-chunk Expand and `< file` disk read. A pointer, so copying the Model on
+	// each Update doesn't trip strings.Builder's copy check.
+	streamIndex int
+	streamBody  *strings.Builder
+	streamHead  string
+
 	// showRequest toggles the request preview (method/URL/headers/body) at the
 	// top of the right pane; showHeaders toggles the response headers above the
 	// body. Both off by default so the response body gets the whole pane.
@@ -123,12 +135,14 @@ func New(path, envName string) Model {
 		envName: envName,
 		// An empty (non-nil) plan keeps the model renderable if load fails before
 		// it can install the real one.
-		plan:     &runner.Plan{},
-		runFrom:  -1,
-		viewport: viewport.New(0, 0),
-		spinner:  sp,
-		help:     help.New(),
-		keys:     newKeyMap(),
+		plan:        &runner.Plan{},
+		runFrom:     -1,
+		streamIndex: -1,
+		streamBody:  &strings.Builder{},
+		viewport:    viewport.New(0, 0),
+		spinner:     sp,
+		help:        help.New(),
+		keys:        newKeyMap(),
 	}
 	m.applyStyles()
 	m.load()
@@ -331,8 +345,11 @@ const authWaitNotice = "Waiting for browser sign-in to complete…"
 // onResult stores a finished result and advances a run-from-here chain.
 func (m Model) onResult(msg exec.ResultMsg) (tea.Model, tea.Cmd) {
 	// A terminal ResultMsg ends any active stream (only one runs at a time), so
-	// release the subscription. The StreamDoneMsg path covers cancelled streams.
+	// release the subscription and stop treating this step as the live stream —
+	// its Body now comes from the terminal result. The StreamDoneMsg path covers
+	// cancelled streams.
 	m.streamSub = nil
+	m.streamIndex = -1
 	// Clear the "waiting for sign-in" hint now the step has finished (unless a
 	// later action already replaced the notice).
 	if m.notice == authWaitNotice {
@@ -371,24 +388,22 @@ func (m Model) onResult(msg exec.ResultMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// onStreamChunk appends a streamed slice to its step's (still Running) result
-// and, when that step is selected, re-renders the response pinned to the bottom
-// so the output scrolls as it arrives. It always returns WaitForChunk so the
-// pump goroutine keeps draining even after a reset flips the step's status —
-// the guard only stops us mutating a result that no longer belongs to the
-// stream.
+// onStreamChunk appends a streamed slice to the live stream's body builder and,
+// when that step is selected, re-renders the response pinned to the bottom so the
+// output scrolls in as it arrives. The body lives only in streamBody until the
+// terminal ResultMsg replaces it: appending is amortised O(1) and streamView
+// reuses the cached prefix, where the old path re-concatenated Result.Body and
+// rebuilt the whole pane through formatResult (re-expanding the step and
+// re-reading any `< file` body from disk) on every chunk — quadratic over a long
+// token stream. It always returns WaitForChunk so the pump goroutine keeps
+// draining even after a reset clears streamIndex; the guard only stops us
+// appending to a stream that no longer belongs to this step.
 func (m Model) onStreamChunk(msg exec.StreamChunkMsg) (tea.Model, tea.Cmd) {
-	if msg.Index < len(m.plan.Results) && m.plan.Results[msg.Index].Status == step.Running {
-		r := m.plan.Results[msg.Index]
-		r.Body += msg.Data
-		m.plan.Results[msg.Index] = r
-		if msg.Index < len(m.bodyView) {
-			// Raw, not highlighted: a partial body isn't valid JSON, and SSE/NDJSON
-			// framing should read as-is. The terminal result re-highlights if JSON.
-			m.bodyView[msg.Index] = r.Body
-		}
+	if msg.Index == m.streamIndex && msg.Index < len(m.plan.Results) &&
+		m.plan.Results[msg.Index].Status == step.Running {
+		m.streamBody.WriteString(msg.Data)
 		if msg.Index == m.cursor {
-			m.viewport.SetContent(m.formatResult(m.cursor))
+			m.viewport.SetContent(m.streamView())
 			m.viewport.GotoBottom()
 		}
 	}
@@ -405,6 +420,7 @@ func (m *Model) cancelStream() {
 		m.streamSub.Cancel()
 		m.streamSub = nil
 	}
+	m.streamIndex = -1
 }
 
 func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -676,6 +692,16 @@ func (m *Model) run(i int) tea.Cmd {
 	if i < len(m.bodyView) {
 		m.bodyView[i] = ""
 	}
+	// Mark this step as the live stream before the first render, so refreshResult
+	// caches its request-preview prefix and chunk re-renders take the cheap
+	// streamView path. A fresh builder collects the body off the step's Result.
+	streaming := s.Stream && s.Kind == step.KindHTTP
+	if streaming {
+		m.streamIndex = i
+		m.streamBody = &strings.Builder{}
+	} else {
+		m.streamIndex = -1
+	}
 	if i == m.cursor {
 		m.refreshResult()
 	}
@@ -688,7 +714,7 @@ func (m *Model) run(i int) tea.Cmd {
 		m.noticeOK = false
 	}
 	var cmd tea.Cmd
-	if s.Stream && s.Kind == step.KindHTTP {
+	if streaming {
 		// Streaming delivers many messages; the body arrives raw (no off-thread
 		// highlight pass) and is appended live by onStreamChunk.
 		cmd = exec.RunStream(i, s, m.plan.AuthResolver(s))

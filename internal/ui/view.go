@@ -53,8 +53,28 @@ func (m *Model) refreshResult() {
 		m.viewport.SetContent("")
 		return
 	}
+	// When the live-stream step is what's on screen, recompute its cached prefix
+	// (a width change or `i` toggle may have changed it) so the chunk re-renders
+	// that follow can reuse it without re-expanding the step.
+	if m.cursor == m.streamIndex && m.streamIndex < len(m.plan.Results) &&
+		m.plan.Results[m.streamIndex].Status == step.Running {
+		m.refreshStreamHead()
+	}
 	m.viewport.SetContent(m.formatResult(m.cursor))
 	m.viewport.GotoTop()
+}
+
+// refreshStreamHead recomputes streamHead — the request-preview prefix shown
+// above a live stream's body. The request can't change mid-stream, so chunk
+// re-renders reuse the cached value rather than re-expanding the step (and
+// re-reading any `< file` body) on every chunk.
+func (m *Model) refreshStreamHead() {
+	if !m.showRequest {
+		m.streamHead = ""
+		return
+	}
+	s, expandErr := m.plan.Expand(m.plan.Steps[m.streamIndex])
+	m.streamHead = m.requestPreview(s, expandErr)
 }
 
 func (m Model) View() string {
@@ -572,10 +592,76 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
+// requestPreview renders the method/URL/headers/body block shown above the
+// response when the request preview is toggled on (`i`). s is the already-
+// expanded step; expandErr is a failed `< file` body read, reported inline.
+func (m Model) requestPreview(s step.Step, expandErr error) string {
+	var b strings.Builder
+	if s.Kind == step.KindShell {
+		b.WriteString(m.styles.dim.Render("$ shell") + "\n")
+		b.WriteString(s.Body + "\n")
+	} else {
+		b.WriteString(m.styles.method.Foreground(palette.accent).
+			Render(s.Method) + " " + s.URL + "\n")
+		for _, k := range sortedKeys(s.Headers) {
+			b.WriteString(m.styles.dim.Render(k+": "+s.Headers[k]) + "\n")
+		}
+		if opts := requestOpts(s); opts != "" {
+			b.WriteString(m.styles.dim.Render(opts) + "\n")
+		}
+		switch {
+		case s.BodyFile != "":
+			ref := "< " + s.BodyFile
+			if s.BodyFileVars {
+				ref = "<@ " + s.BodyFile
+			}
+			b.WriteString("\n" + m.styles.dim.Render("body from "+ref) + "\n")
+			if expandErr != nil {
+				b.WriteString(lipgloss.NewStyle().Foreground(palette.danger).
+					Render(expandErr.Error()) + "\n")
+			} else if s.Body != "" {
+				b.WriteString(highlightJSON(s.Body, jsonTheme) + "\n")
+			}
+		case s.Body != "":
+			b.WriteString("\n" + highlightJSON(s.Body, jsonTheme) + "\n")
+		}
+	}
+	b.WriteString(m.styles.dim.Render(strings.Repeat("─", min(m.viewport.Width, 40))) + "\n")
+	return b.String()
+}
+
+// streamView renders the live `# @stream` response for the active stream: the
+// cached request-preview prefix (streamHead) followed by a live indicator and the
+// body accumulated in streamBody. It deliberately bypasses formatResult's
+// per-call Expand (and its `< file` disk read) — over a long token stream that
+// would run once per chunk to rebuild output that, apart from the appended slice,
+// never changes. The chunk handler pins the viewport to the bottom so new text
+// scrolls into view; raw, not highlighted, since a partial body isn't valid JSON
+// and SSE/NDJSON framing should read as-is (the terminal result re-highlights).
+func (m Model) streamView() string {
+	var b strings.Builder
+	b.WriteString(m.streamHead)
+	if m.streamBody.Len() > 0 {
+		b.WriteString(m.spinner.View() + m.styles.dim.Render(" streaming…") + "\n\n")
+		b.WriteString(m.streamBody.String())
+	} else {
+		b.WriteString(m.spinner.View() + m.styles.dim.Render(" running…"))
+	}
+	return b.String()
+}
+
 // formatResult builds the full request+response text for step i, with all
 // {{vars}} expanded against the current variable set so the preview matches
 // what will actually run.
 func (m Model) formatResult(i int) string {
+	// A `# @stream` step in flight renders through streamView, which reuses the
+	// cached request preview and the streamBody builder instead of expanding the
+	// step and rebuilding the body on every chunk.
+	if i == m.streamIndex && i < len(m.plan.Results) &&
+		m.plan.Results[i].Status == step.Running {
+		return m.streamView()
+	}
+
 	// expand may fail to read a `< file` body; the preview still shows the
 	// request line and the file reference, with the error noted below.
 	s, expandErr := m.plan.Expand(m.plan.Steps[i])
@@ -585,36 +671,7 @@ func (m Model) formatResult(i int) string {
 	// Request preview — optional, toggled with `i`. Off by default so the
 	// response output gets the full pane.
 	if m.showRequest {
-		if s.Kind == step.KindShell {
-			b.WriteString(m.styles.dim.Render("$ shell") + "\n")
-			b.WriteString(s.Body + "\n")
-		} else {
-			b.WriteString(m.styles.method.Foreground(palette.accent).
-				Render(s.Method) + " " + s.URL + "\n")
-			for _, k := range sortedKeys(s.Headers) {
-				b.WriteString(m.styles.dim.Render(k+": "+s.Headers[k]) + "\n")
-			}
-			if opts := requestOpts(s); opts != "" {
-				b.WriteString(m.styles.dim.Render(opts) + "\n")
-			}
-			switch {
-			case s.BodyFile != "":
-				ref := "< " + s.BodyFile
-				if s.BodyFileVars {
-					ref = "<@ " + s.BodyFile
-				}
-				b.WriteString("\n" + m.styles.dim.Render("body from "+ref) + "\n")
-				if expandErr != nil {
-					b.WriteString(lipgloss.NewStyle().Foreground(palette.danger).
-						Render(expandErr.Error()) + "\n")
-				} else if s.Body != "" {
-					b.WriteString(highlightJSON(s.Body, jsonTheme) + "\n")
-				}
-			case s.Body != "":
-				b.WriteString("\n" + highlightJSON(s.Body, jsonTheme) + "\n")
-			}
-		}
-		b.WriteString(m.styles.dim.Render(strings.Repeat("─", min(m.viewport.Width, 40))) + "\n")
+		b.WriteString(m.requestPreview(s, expandErr))
 	}
 
 	// Response.
@@ -627,15 +684,9 @@ func (m Model) formatResult(i int) string {
 		b.WriteString(key.Render("enter") + m.styles.dim.Render(" run   ·   ") +
 			key.Render("a") + m.styles.dim.Render(" run from here"))
 	case step.Running:
-		if r.Body != "" {
-			// A `# @stream` response in flight: show what's arrived so far, raw,
-			// under a live indicator. The chunk handler keeps the viewport pinned
-			// to the bottom so new text scrolls into view.
-			b.WriteString(m.spinner.View() + m.styles.dim.Render(" streaming…") + "\n\n")
-			b.WriteString(r.Body)
-		} else {
-			b.WriteString(m.spinner.View() + m.styles.dim.Render(" running…"))
-		}
+		// A non-streaming request in flight; a live `# @stream` step is handled
+		// above by streamView.
+		b.WriteString(m.spinner.View() + m.styles.dim.Render(" running…"))
 	default:
 		b.WriteString(m.responseSummary(i) + "\n")
 		if r.Err != nil {

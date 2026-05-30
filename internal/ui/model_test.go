@@ -206,7 +206,7 @@ func TestEnvPickerFitsTerminal(t *testing.T) {
 // newModel builds a Model wired to the given plan, for the chain/reset wiring
 // tests that drive onResult directly (no Bubble Tea harness).
 func newModel(p *runner.Plan, runFrom int) Model {
-	return Model{plan: p, runFrom: runFrom}
+	return Model{plan: p, runFrom: runFrom, streamIndex: -1, streamBody: &strings.Builder{}}
 }
 
 // TestStepAtRow checks the mouse hit-testing maps screen rows to steps, skipping
@@ -320,5 +320,71 @@ func TestResetStepClearsState(t *testing.T) {
 	}
 	if m.plan.Vars["host"] != "http://api" {
 		t.Error("base variables should survive a reset")
+	}
+}
+
+// TestStreamChunksAccumulate drives the live-stream path: chunks land in the
+// streamBody builder (not the step's Result, which stays empty until the stream
+// ends), the response pane shows the growing body, and a terminal ResultMsg
+// installs the final body and clears the stream.
+func TestStreamChunksAccumulate(t *testing.T) {
+	m := newModel(&runner.Plan{
+		Steps:   []step.Step{{Name: "sse", Kind: step.KindHTTP, Stream: true}},
+		Results: make([]step.Result, 1),
+	}, -1)
+	// Simulate a stream in flight on step 0, as run() would set it up before the
+	// first chunk arrives (without touching the network).
+	m.streamIndex = 0
+	m.streamBody = &strings.Builder{}
+	m.plan.Results[0] = step.Result{Status: step.Running}
+	m.refreshLabels() // populate display names so View can render the list
+
+	var model tea.Model = m
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	for _, c := range []string{"hello ", "wo", "rld!"} {
+		model, _ = model.Update(exec.StreamChunkMsg{Index: 0, Data: c})
+	}
+
+	got := model.(Model)
+	if body := got.streamBody.String(); body != "hello world!" {
+		t.Errorf("streamBody = %q, want %q", body, "hello world!")
+	}
+	// The body lives in the builder, not the step result, while streaming.
+	if b := got.plan.Results[0].Body; b != "" {
+		t.Errorf("Result.Body should stay empty mid-stream, got %q", b)
+	}
+	if v := got.View(); !strings.Contains(v, "hello world!") || !strings.Contains(v, "streaming") {
+		t.Errorf("view missing live stream body/indicator; got:\n%s", v)
+	}
+
+	// The terminal result carries the full body and ends the stream.
+	model, _ = model.Update(exec.ResultMsg{Index: 0, Result: step.Result{
+		Status: step.Done, StatusCode: 200, Body: "hello world!"}})
+	done := model.(Model)
+	if done.streamIndex != -1 {
+		t.Errorf("streamIndex = %d, want -1 after terminal result", done.streamIndex)
+	}
+	if done.plan.Results[0].Body != "hello world!" {
+		t.Errorf("terminal Result.Body = %q, want %q", done.plan.Results[0].Body, "hello world!")
+	}
+}
+
+// TestStreamChunkIgnoredAfterStreamCleared verifies a late chunk for a step that
+// is no longer the live stream (e.g. after a cancel/reset reset streamIndex) is
+// dropped rather than mutating stale state.
+func TestStreamChunkIgnoredAfterStreamCleared(t *testing.T) {
+	m := newModel(&runner.Plan{
+		Steps:   []step.Step{{Name: "sse", Kind: step.KindHTTP, Stream: true}},
+		Results: []step.Result{{Status: step.Running}},
+	}, -1)
+	m.streamIndex = -1 // stream already cancelled
+
+	var model tea.Model = m
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model, _ = model.Update(exec.StreamChunkMsg{Index: 0, Data: "late"})
+
+	if body := model.(Model).streamBody.String(); body != "" {
+		t.Errorf("a chunk for a cleared stream should be dropped, got %q", body)
 	}
 }
