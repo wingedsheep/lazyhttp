@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wingedsheep/lazyhttp/internal/auth"
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
@@ -43,6 +44,46 @@ func TestExpandBodyFromFile(t *testing.T) {
 	// A missing file surfaces as an error so the step can fail visibly.
 	if _, err := p.Expand(step.Step{Kind: step.KindHTTP, BodyFile: "nope.json"}); err == nil {
 		t.Error("expected an error for a missing body file")
+	}
+}
+
+// TestExpandBodyFileCache verifies a `< file` body is memoized across expands
+// (so list navigation doesn't re-read it) yet an on-disk edit is still picked up
+// because the modtime/size signature no longer matches.
+func TestExpandBodyFileCache(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "body.json")
+	if err := os.WriteFile(path, []byte(`{"v":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &Plan{Dir: dir, Vars: httpfile.Vars{}}
+	s := step.Step{Kind: step.KindHTTP, BodyFile: "body.json"}
+
+	first, err := p.Expand(s)
+	if err != nil {
+		t.Fatalf("expand 1: %v", err)
+	}
+	if first.Body != `{"v":1}` {
+		t.Fatalf("body = %q, want original", first.Body)
+	}
+	if _, ok := p.bodyFileCache[path]; !ok {
+		t.Fatalf("expected %s to be cached after expand", path)
+	}
+
+	// Rewriting with a bumped modtime+size invalidates the cache; the edit shows.
+	future := time.Now().Add(2 * time.Second)
+	if err := os.WriteFile(path, []byte(`{"v":22}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+	edited, err := p.Expand(s)
+	if err != nil {
+		t.Fatalf("expand 2: %v", err)
+	}
+	if edited.Body != `{"v":22}` {
+		t.Errorf("body = %q, want edited contents after modtime change", edited.Body)
 	}
 }
 

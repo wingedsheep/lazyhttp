@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/wingedsheep/lazyhttp/internal/auth"
 	"github.com/wingedsheep/lazyhttp/internal/capture"
@@ -96,6 +97,22 @@ type Plan struct {
 	// steps until they expire.
 	AuthConfigs map[string]auth.Config
 	AuthCache   *auth.Cache
+
+	// bodyFileCache memoizes `< file` / `<@ file` body reads keyed by absolute
+	// path. Expand runs on every preview, and the TUI re-expands the selected
+	// step on each cursor arrival, so a large body file would otherwise be
+	// re-read from disk on every visit. A cached entry is reused only while the
+	// file's modtime and size are unchanged, so an edit on disk is still picked
+	// up before the next expand.
+	bodyFileCache map[string]bodyFileEntry
+}
+
+// bodyFileEntry is one memoized `< file` body together with the stat signature
+// (modtime + size) that was current when it was read.
+type bodyFileEntry struct {
+	modTime time.Time
+	size    int64
+	data    string
 }
 
 // Load reads and parses the plan at path against the named environment (which
@@ -224,16 +241,39 @@ func (p *Plan) Expand(s step.Step) (step.Step, error) {
 	if !filepath.IsAbs(full) {
 		full = filepath.Join(p.Dir, full)
 	}
-	data, err := os.ReadFile(full)
+	body, err := p.readBodyFile(full)
 	if err != nil {
 		return s, err
 	}
-	body := string(data)
 	if s.BodyFileVars {
 		body = expand(body)
 	}
 	s.Body = body
 	return s, nil
+}
+
+// readBodyFile returns the contents of an absolute body-file path, serving a
+// cached copy while the file's modtime and size are unchanged so repeated
+// previews of the same step don't re-read it from disk. {{var}} expansion of
+// `<@` bodies happens in Expand against the live var set, so the raw bytes are
+// what's cached — a captured value changing between visits still re-expands.
+func (p *Plan) readBodyFile(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if e, ok := p.bodyFileCache[path]; ok && e.size == info.Size() && e.modTime.Equal(info.ModTime()) {
+		return e.data, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if p.bodyFileCache == nil {
+		p.bodyFileCache = make(map[string]bodyFileEntry)
+	}
+	p.bodyFileCache[path] = bodyFileEntry{modTime: info.ModTime(), size: info.Size(), data: string(data)}
+	return string(data), nil
 }
 
 // AuthResolver returns an exec.AuthResolver for the expanded step s, or nil when
