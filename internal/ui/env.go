@@ -63,23 +63,19 @@ func (m Model) envOptions() []string {
 	return append([]string{""}, m.envNames...)
 }
 
-// contains reports whether s is one of names.
-func contains(names []string, s string) bool {
-	for _, n := range names {
-		if n == s {
-			return true
-		}
-	}
-	return false
-}
-
-// indexOf returns the position of s in names, or 0 when it isn't present so the
-// picker opens on a sensible default.
+// indexOf returns the position of s in names, or -1 when it isn't present.
+// Callers that want a fallback select one explicitly (e.g. max(indexOf(...), 0))
+// rather than relying on 0, which is itself a valid index.
 func indexOf(names []string, s string) int {
 	for i, n := range names {
 		if n == s {
 			return i
 		}
 	}
-	return 0
+	return -1
+}
+
+// contains reports whether s is one of names.
+func contains(names []string, s string) bool {
+	return indexOf(names, s) >= 0
 }

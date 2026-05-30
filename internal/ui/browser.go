@@ -13,9 +13,44 @@ import (
 )
 
 // countPending marks a plan whose step count hasn't been parsed yet; counts are
-// resolved lazily as rows scroll into view (see browser.countLabel). A parse
-// error from CountSteps shows up as -1 and renders as a dash.
+// resolved lazily as rows scroll into view (see countCache.label). A parse error
+// from CountSteps shows up as -1 and renders as a dash.
 const countPending = -2
+
+// countCache memoizes each plan's step count, parsed lazily the first time its
+// row is rendered. It is held by pointer (like Model.reqHL) so the browser's
+// value-receiver render path can fill it in: the write lands on the shared
+// pointee rather than on a render-time copy of the browser, and there's no
+// fixed-size-backing-array invariant to preserve.
+type countCache struct {
+	counts []int // step count per index.Files entry; countPending until parsed
+}
+
+// newCountCache sizes a cache for n plans, every entry pending until first asked.
+func newCountCache(n int) *countCache {
+	c := &countCache{counts: make([]int, n)}
+	for i := range c.counts {
+		c.counts[i] = countPending
+	}
+	return c
+}
+
+// label returns the rendered step-count label for plan i at path, parsing and
+// caching the count on first request. Only rows in the rendered window reach
+// this path, so a large tree never parses files the user hasn't scrolled to.
+func (c *countCache) label(i int, path string) string {
+	if c.counts[i] == countPending {
+		c.counts[i] = httpfile.CountSteps(path)
+	}
+	switch n := c.counts[i]; {
+	case n < 0:
+		return "—"
+	case n == 1:
+		return "1 step"
+	default:
+		return fmt.Sprintf("%d steps", n)
+	}
+}
 
 // openPlanMsg asks the App to open the plan at Path in the plan view. The
 // browser emits it when the user selects a row.
@@ -27,7 +62,7 @@ type openPlanMsg struct{ Path string }
 // the two screens feel like one app. Selecting a row emits an openPlanMsg.
 type browser struct {
 	index  httpfile.PlanIndex
-	counts []int // step count per index.Files entry; countPending until parsed
+	counts *countCache // per-plan step counts, resolved lazily on render
 
 	cursor    int // absolute index into index.Files
 	filter    string
@@ -50,16 +85,12 @@ type browser struct {
 // newBrowser builds the overview for a discovered plan index, seeding every
 // step count as pending so they fill in lazily.
 func newBrowser(index httpfile.PlanIndex) browser {
-	h := help.New()
 	b := browser{
 		index:  index,
-		counts: make([]int, len(index.Files)),
-		help:   h,
+		counts: newCountCache(len(index.Files)),
+		help:   help.New(),
 		keys:   newBrowserKeyMap(),
 		notice: browseNotice(index),
-	}
-	for i := range b.counts {
-		b.counts[i] = countPending
 	}
 	b.applyStyles()
 	return b
@@ -119,31 +150,10 @@ func (b browser) Update(msg tea.Msg) (browser, tea.Cmd) {
 	return b, nil
 }
 
-// onMouse moves the cursor with the scroll wheel, accumulating events so one
-// physical notch is one step (matching the step list).
+// onMouse moves the cursor with the scroll wheel, one step per physical notch
+// (matching the step list — both share wheelScroll).
 func (b browser) onMouse(msg tea.MouseMsg) (browser, tea.Cmd) {
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		if b.wheelAccum > 0 {
-			b.wheelAccum = 0
-		}
-		b.wheelAccum--
-	case tea.MouseButtonWheelDown:
-		if b.wheelAccum < 0 {
-			b.wheelAccum = 0
-		}
-		b.wheelAccum++
-	default:
-		return b, nil
-	}
-	for b.wheelAccum <= -wheelStep {
-		b.moveCursor(-1)
-		b.wheelAccum += wheelStep
-	}
-	for b.wheelAccum >= wheelStep {
-		b.moveCursor(1)
-		b.wheelAccum -= wheelStep
-	}
+	wheelScroll(msg.Button, &b.wheelAccum, b.moveCursor)
 	return b, nil
 }
 
@@ -500,7 +510,7 @@ func (b browser) renderRow(row browseRow, innerW int) string {
 		caret, caretColor = "▸", palette.accent
 	}
 
-	count := b.countLabel(row.fileIdx)
+	count := b.counts.label(row.fileIdx, b.index.Files[row.fileIdx].Path)
 	countW := lipgloss.Width(count)
 
 	// Fixed columns before the name: prefix + caret + space.
@@ -516,25 +526,6 @@ func (b browser) renderRow(row browseRow, innerW int) string {
 		cell(palette.fg, sel, sel).Render(name) +
 		bg.Render(strings.Repeat(" ", gap)) +
 		cell(palette.subtle, sel, false).Render(count)
-}
-
-// countLabel renders the per-file step count for the list. The count is resolved
-// lazily here — only rows in the rendered window reach this path, so a large tree
-// never parses files the user hasn't scrolled to. The parse result is cached on
-// b.counts; the write lands in the shared backing array, so it persists across
-// frames even though View runs on a value receiver and each file is parsed once.
-func (b browser) countLabel(i int) string {
-	if b.counts[i] == countPending {
-		b.counts[i] = httpfile.CountSteps(b.index.Files[i].Path)
-	}
-	switch n := b.counts[i]; {
-	case n < 0:
-		return "—"
-	case n == 1:
-		return "1 step"
-	default:
-		return fmt.Sprintf("%d steps", n)
-	}
 }
 
 // browserKeyMap is the overview's binding set: list navigation, filter, open,
