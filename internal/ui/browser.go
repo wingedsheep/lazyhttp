@@ -375,9 +375,75 @@ func (b browser) filterSegment() string {
 	return ""
 }
 
-// renderList draws the overview body: a PLANS header, subfolder group headings,
-// and one row per visible plan with a tree connector and step count — reusing the
-// step list's layout vocabulary so the screens match.
+// browseRow is one line of the rendered tree: either a directory heading
+// (fileIdx < 0) or a plan (fileIdx indexes index.Files). prefix is the tree-guide
+// string — ancestor continuation bars plus this entry's elbow — so a row's
+// indentation, and therefore its depth, is drawn rather than implied.
+type browseRow struct {
+	fileIdx int
+	prefix  string // guide bars + connector ("│ │ ├"), no trailing space
+	label   string // directory segment or file name
+}
+
+// planNode is a node in the folder tree built from the visible plans: a directory
+// (fileIdx < 0, with children) or a leaf plan (fileIdx >= 0).
+type planNode struct {
+	name     string
+	fileIdx  int
+	children []*planNode
+}
+
+// dir finds or creates the directory child named name. Plans arrive in sorted-Rel
+// order, so a directory's entries are contiguous and first-seen order already
+// matches the tree order we want — we just reuse the node once it exists.
+func (n *planNode) dir(name string) *planNode {
+	for _, c := range n.children {
+		if c.fileIdx < 0 && c.name == name {
+			return c
+		}
+	}
+	c := &planNode{name: name, fileIdx: -1}
+	n.children = append(n.children, c)
+	return c
+}
+
+// treeRows turns the visible plans into a depth-first list of tree rows, building
+// the guide prefixes as it descends so nesting is explicit at every level: each
+// extra folder steps in by one guide column, with "│" bars continuing past
+// siblings that still have entries below them.
+func (b browser) treeRows(vis []int) []browseRow {
+	root := &planNode{fileIdx: -1}
+	for _, i := range vis {
+		node := root
+		if dir := b.index.Files[i].Dir; dir != "" {
+			for _, seg := range strings.Split(dir, "/") {
+				node = node.dir(seg)
+			}
+		}
+		node.children = append(node.children, &planNode{name: b.index.Files[i].Name, fileIdx: i})
+	}
+
+	var rows []browseRow
+	var walk func(n *planNode, guide string)
+	walk = func(n *planNode, guide string) {
+		for idx, c := range n.children {
+			last := idx == len(n.children)-1
+			conn, ext := "├", "│ "
+			if last {
+				conn, ext = "╰", "  "
+			}
+			rows = append(rows, browseRow{fileIdx: c.fileIdx, prefix: guide + conn, label: c.name})
+			if c.fileIdx < 0 {
+				walk(c, guide+ext)
+			}
+		}
+	}
+	walk(root, "")
+	return rows
+}
+
+// renderList draws the overview body: a PLANS header followed by an indented tree
+// of subfolders and plans, so deeply nested files read as deeply nested.
 func (b browser) renderList() string {
 	innerW := max(b.width-4, 8) // pane content width, inside its padding
 	header := b.styles.group.Render("PLANS")
@@ -394,75 +460,62 @@ func (b browser) renderList() string {
 		return header + "\n" + b.styles.dim.Render(truncate(msg, innerW))
 	}
 
-	var lines []string
+	rows := b.treeRows(vis)
+	lines := make([]string, len(rows))
 	cursorLine := 0
-	group := ""
-	for p, i := range vis {
-		if g := b.index.Files[i].Dir; g != group {
-			group = g
-			if group != "" {
-				lines = append(lines, b.styles.group.Render("▌ "+truncate(group, innerW-2)))
-			}
+	for r, row := range rows {
+		if row.fileIdx == b.cursor {
+			cursorLine = r
 		}
-		conn := ""
-		if group != "" {
-			if p == len(vis)-1 || b.index.Files[vis[p+1]].Dir != group {
-				conn = "╰"
-			} else {
-				conn = "├"
-			}
-		}
-		if i == b.cursor {
-			cursorLine = len(lines)
-		}
-		lines = append(lines, b.renderRow(i, conn, innerW))
+		lines[r] = b.renderRow(row, innerW)
 	}
 
 	// Scroll a window that keeps the cursor in view and never spills past the
 	// pane (one row goes to the PLANS header), mirroring renderList for steps.
 	budget := max(b.contentH-2, 1)
-	start := 0
 	if len(lines) > budget {
-		start = clamp(cursorLine-budget/2, 0, len(lines)-budget)
+		start := clamp(cursorLine-budget/2, 0, len(lines)-budget)
 		lines = lines[start : start+budget]
 	}
 
 	return header + "\n" + strings.Join(lines, "\n")
 }
 
-// renderRow lays out one plan row to innerW columns: an optional tree connector,
-// a cursor caret, the file name, and a right-aligned step count. The selected row
-// paints a solid background across every segment.
-func (b browser) renderRow(i int, conn string, innerW int) string {
-	f := b.index.Files[i]
-	sel := i == b.cursor
+// renderRow lays out one tree row to innerW columns. A directory heading is its
+// guide prefix and an accented folder name; a plan row adds a cursor caret, the
+// file name, and a right-aligned step count, painting a solid background across
+// the whole line when selected.
+func (b browser) renderRow(row browseRow, innerW int) string {
+	prefixW := lipgloss.Width(row.prefix)
 
+	if row.fileIdx < 0 {
+		name := truncate(row.label+"/", max(innerW-prefixW-1, 1))
+		return cell(palette.border, false, false).Render(row.prefix) +
+			" " + b.styles.group.Render(name)
+	}
+
+	sel := row.fileIdx == b.cursor
 	caret, caretColor := " ", lipgloss.TerminalColor(palette.subtle)
 	if sel {
 		caret, caretColor = "▸", palette.accent
 	}
 
-	count := b.countLabel(i)
+	count := b.countLabel(row.fileIdx)
 	countW := lipgloss.Width(count)
-	connW := lipgloss.Width(conn)
 
-	// Fixed columns before the name: conn + caret + space.
-	fixed := connW + 1 + 1
+	// Fixed columns before the name: prefix + caret + space.
+	fixed := prefixW + 1 + 1
 	nameMax := max(innerW-fixed-countW-1, 1)
-	name := truncate(f.Name, nameMax)
+	name := truncate(row.label, nameMax)
 	gap := max(innerW-fixed-lipgloss.Width(name)-countW, 1)
 
 	bg := cell(palette.fg, sel, false)
-	row := ""
-	if conn != "" {
-		row += cell(palette.border, sel, false).Render(conn)
-	}
-	row += cell(caretColor, sel, true).Render(caret) +
+	return cell(palette.border, sel, false).Render(row.prefix) +
+		cell(caretColor, sel, true).Render(caret) +
 		bg.Render(" ") +
 		cell(palette.fg, sel, sel).Render(name) +
 		bg.Render(strings.Repeat(" ", gap)) +
 		cell(palette.subtle, sel, false).Render(count)
-	return row
 }
 
 // countLabel renders the per-file step count for the list. The count is resolved
