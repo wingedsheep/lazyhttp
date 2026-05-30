@@ -117,6 +117,13 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshResult()
 		return m, nil
 
+	case key.Matches(msg, m.keys.Stop):
+		// Stop a live stream early but keep what has arrived; a no-op when nothing
+		// is streaming. Handled here (not in listKey) so it works with either pane
+		// focused — the user is usually watching the output.
+		m.stopStream()
+		return m, nil
+
 	case key.Matches(msg, m.keys.Request):
 		m.showRequest = !m.showRequest
 		m.keys.requestOn = m.showRequest

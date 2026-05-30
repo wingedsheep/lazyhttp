@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +86,45 @@ func TestRunHTTPTimeout(t *testing.T) {
 	}
 	if got.Status != step.Failed {
 		t.Errorf("status: want Failed, got %v", got.Status)
+	}
+}
+
+// TestRunHTTPTruncatesLargeBody verifies a response larger than the cap is
+// clipped to maxBodyBytes with the truncation notice appended, rather than
+// buffered without bound.
+func TestRunHTTPTruncatesLargeBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(strings.Repeat("a", maxBodyBytes+4096)))
+	}))
+	defer srv.Close()
+
+	got := Do(step.Step{Kind: step.KindHTTP, Method: "GET", URL: srv.URL}, nil)
+	if got.Err != nil {
+		t.Fatalf("unexpected error: %v", got.Err)
+	}
+	if !strings.HasSuffix(got.Body, truncationNotice) {
+		t.Fatal("oversized body should end with the truncation notice")
+	}
+	if clipped := strings.TrimSuffix(got.Body, truncationNotice); len(clipped) != maxBodyBytes {
+		t.Errorf("clipped body: got %d bytes, want %d", len(clipped), maxBodyBytes)
+	}
+}
+
+// TestRunShellTruncatesLargeOutput verifies runaway shell output is bounded to
+// maxBodyBytes instead of growing the buffer without limit.
+func TestRunShellTruncatesLargeOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell pipeline")
+	}
+	// head -c emits a few bytes past the cap; the buffer must stop at the cap.
+	body := "head -c " + strconv.Itoa(maxBodyBytes+4096) + " /dev/zero | tr '\\0' a"
+	got := Do(step.Step{Kind: step.KindShell, Body: body}, nil)
+	if !strings.HasSuffix(got.Body, truncationNotice) {
+		t.Fatal("oversized shell output should end with the truncation notice")
+	}
+	if clipped := strings.TrimSuffix(got.Body, truncationNotice); len(clipped) != maxBodyBytes {
+		t.Errorf("clipped output: got %d bytes, want %d", len(clipped), maxBodyBytes)
 	}
 }
 

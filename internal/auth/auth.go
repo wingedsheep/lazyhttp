@@ -415,6 +415,11 @@ func (c *Cache) refresh(cfg Config, refreshToken string) (cachedToken, error) {
 	return tok, nil
 }
 
+// maxTokenResponse caps the token-endpoint reply buffered into memory. Token
+// responses are small JSON objects, so any well-behaved endpoint stays far
+// under this; the cap only stops an unbounded body from exhausting memory.
+const maxTokenResponse = 1 << 20 // 1 MiB
+
 // postToken POSTs an already-built grant form to the token endpoint, applying
 // client authentication per cfg (HTTP Basic by default, in the body when
 // requested, or omitted) and parsing the JSON response into a cachedToken. It
@@ -453,7 +458,10 @@ func (c *Cache) postToken(cfg Config, form url.Values) (cachedToken, error) {
 		return cachedToken{}, fmt.Errorf("auth: token request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	// A token endpoint replies with a small JSON object. Cap the read so a broken
+	// or hostile endpoint can't stream an unbounded body into memory; 1 MiB is far
+	// beyond any legitimate token response.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxTokenResponse))
 	if err != nil {
 		return cachedToken{}, err
 	}

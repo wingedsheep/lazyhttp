@@ -15,6 +15,7 @@ type keyMap struct {
 	HalfDn   key.Binding
 	Run      key.Binding
 	RunAll   key.Binding
+	Stop     key.Binding
 	Focus    key.Binding
 	Reload   key.Binding
 	Clear    key.Binding
@@ -65,6 +66,7 @@ func newKeyMap() keyMap {
 		HalfDn:   key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^d", "half-page down")),
 		Run:      key.NewBinding(key.WithKeys("enter", "e"), key.WithHelp("enter", "run")),
 		RunAll:   key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "run from here")),
+		Stop:     key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "stop stream")),
 		Focus:    key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
 		Reload:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 		Clear:    key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "clear")),
@@ -102,7 +104,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	last = append(last, k.Help, k.Quit)
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Left, k.Right, k.Top, k.Bottom, k.HalfUp, k.HalfDn},
-		{k.Run, k.RunAll, k.Clear, k.ClearAll, k.Reload},
+		{k.Run, k.RunAll, k.Stop, k.Clear, k.ClearAll, k.Reload},
 		last,
 	}
 }
