@@ -69,9 +69,9 @@ func evalOp(op, want, got string, found bool) (pass bool, detail string, known b
 	case "exists":
 		return found, "", true
 	case "==":
-		return found && got == unquote(want), "", true
+		return found && equalValues(got, unquote(want)), "", true
 	case "!=":
-		return found && got != unquote(want), "", true
+		return found && !equalValues(got, unquote(want)), "", true
 	case "contains":
 		return found && strings.Contains(got, unquote(want)), "", true
 	case "in":
@@ -101,7 +101,7 @@ func evalOp(op, want, got string, found bool) (pass bool, detail string, known b
 		if !found {
 			return false, "", true
 		}
-		re, err := regexp.Compile(want) // RE2 syntax; anchors are the author's job
+		re, err := regexp.Compile(unquote(want)) // RE2 syntax; anchors are the author's job
 		if err != nil {
 			return false, fmt.Sprintf("invalid regexp: %v", err), true
 		}
@@ -125,11 +125,33 @@ func numericCompare(op string, l, r float64) bool {
 	return false
 }
 
-// unquote strips a single layer of surrounding single or double quotes, so
-// `== "201"` and `== 201` are equivalent. Operators that compare structurally
-// (matches) skip it on purpose.
+// equalValues compares a resolved value against an (already unquoted) operand
+// for == / !=. When both sides parse as numbers it compares them numerically, so
+// `json.price == 9.90` matches a body that stringifies the value to "9.9";
+// otherwise it falls back to a plain string compare (which still covers strings
+// and booleans like "true"). This mirrors the numeric handling of >/>=/</<=, so
+// equality and ordering agree on what counts as a number.
+func equalValues(got, want string) bool {
+	if g, err := strconv.ParseFloat(strings.TrimSpace(got), 64); err == nil {
+		if w, err := strconv.ParseFloat(strings.TrimSpace(want), 64); err == nil {
+			return g == w
+		}
+	}
+	return got == want
+}
+
+// unquote strips one matched pair of surrounding single or double quotes, so
+// `== "201"` and `== 201` are equivalent. It removes only a genuine matched pair
+// — not a lone or mismatched quote — so an operand whose quote is meaningful
+// (notably a `matches` regex like `"\d+"` vs. an intended `\d+`) keeps any quote
+// that isn't actually wrapping the value.
 func unquote(s string) string {
-	return strings.Trim(s, `"'`)
+	if len(s) >= 2 {
+		if q := s[0]; (q == '"' || q == '\'') && s[len(s)-1] == q {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
 }
 
 // jsonPath walks a dotted/bracketed path into a JSON document.

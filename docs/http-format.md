@@ -74,8 +74,8 @@ doesn't resolve counts as "not found" (fails an `exists`/`==` assertion).
 | Operator | Passes when |
 | --- | --- |
 | `# @assert <expr> exists` | the expression resolves to a value. |
-| `# @assert <expr> == <want>` | the value equals `<want>` exactly. |
-| `# @assert <expr> != <want>` | the value differs from `<want>`. |
+| `# @assert <expr> == <want>` | the value equals `<want>` (numerically when both sides are numbers, otherwise as strings). |
+| `# @assert <expr> != <want>` | the value differs from `<want>` (same number/string rule as `==`). |
 | `# @assert <expr> contains <want>` | the value contains `<want>` as a substring. |
 | `# @assert <expr> in <a,b,c>` | the value is one of the comma-separated set (whitespace around commas is ignored). |
 | `# @assert <expr> > <n>` (also `>=`, `<`, `<=`) | both sides parse as numbers and the comparison holds. |
@@ -95,12 +95,19 @@ Notes:
 
 - **`in`** compares as strings, so `status in 200,204` is the idiomatic "one of
   several acceptable status codes".
-- **Numeric operators** parse *both* sides as numbers; if either side isn't
-  numeric the assertion **fails** (it doesn't error) and the result pane shows
-  why, e.g. `left is not numeric: "abc"`.
+- **Numeric operators** (`>`, `>=`, `<`, `<=`) parse *both* sides as numbers; if
+  either side isn't numeric the assertion **fails** (it doesn't error) and the
+  result pane shows why, e.g. `left is not numeric: "abc"`.
+- **`==` and `!=`** compare numerically when *both* sides parse as numbers, so
+  `json.price == 9.90` matches a response whose value renders as `9.9`. When
+  either side isn't a number they compare as strings, so `json.status == ok`
+  still works. (This keeps equality and the ordering operators in agreement about
+  what counts as a number.)
 - **`matches`** uses Go's [RE2](https://github.com/google/re2/wiki/Syntax) regex
   syntax. The match is partial unless you anchor it (`^…$`); anchoring is up to
-  you. The pattern is taken verbatim — quotes are *not* stripped.
+  you. A single pair of surrounding quotes is stripped first (like the other
+  operators), so `matches "^/orders/\d+$"` and `matches ^/orders/\d+$` are
+  equivalent.
 
 The right-hand `<want>` expands `{{…}}` like anywhere else, so you can assert one
 response against a value captured earlier — including a `# @capture` from the
@@ -113,8 +120,9 @@ same step, since captures run before assertions:
 
 An unknown variable stays literal (`{{missing}}`), so the comparison fails
 visibly rather than matching something unexpected. For `==`, `!=`, `contains`,
-and `in`, surrounding single or double quotes are tolerated and stripped, so
-`@assert status == "201"` and `@assert status == 201` are equivalent.
+`in`, and `matches`, a single pair of surrounding single or double quotes is
+tolerated and stripped, so `@assert status == "201"` and `@assert status == 201`
+are equivalent.
 
 ## Variables
 
@@ -137,8 +145,9 @@ Values come from three places, later ones overriding earlier:
 
 1. **The environment file** — `http-client.env.json` selected with `--env`.
 2. **Inline definitions** — `@name = value` lines anywhere in the file. The value
-   may itself reference earlier `{{vars}}`. These are gathered before any step
-   runs, so position doesn't matter. Example: `@product = lazyhttp widget`.
+   may itself reference any other `{{var}}` — including one defined further down
+   the file: all definitions are gathered before any are resolved, so position
+   doesn't matter. Example: `@product = lazyhttp widget`.
 3. **Captures** — values pulled from responses by `# @capture`.
 
 ### Inline response references

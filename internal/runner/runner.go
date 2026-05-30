@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -21,9 +20,6 @@ import (
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
-
-// placeholderRe matches a {{token}} template, capturing the trimmed inner token.
-var placeholderRe = regexp.MustCompile(`\{\{\s*([^}]+?)\s*\}\}`)
 
 // Unresolved returns the distinct {{var}} placeholders still present in an
 // expanded step's executable fields (URL, headers, body) — variables that did
@@ -40,7 +36,7 @@ func Unresolved(s step.Step) []string {
 	seen := map[string]bool{}
 	var out []string
 	scan := func(in string) {
-		for _, m := range placeholderRe.FindAllStringSubmatch(in, -1) {
+		for _, m := range httpfile.VarPattern.FindAllStringSubmatch(in, -1) {
 			tok := m[1]
 			if strings.HasPrefix(tok, "$") || strings.Contains(tok, ".response.") {
 				continue

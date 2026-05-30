@@ -71,6 +71,23 @@ func TestVarsNotExpandedAtParse(t *testing.T) {
 	}
 }
 
+func TestInlineVarsResolveRegardlessOfOrder(t *testing.T) {
+	// A definition may reference another defined later in the file: the raw values
+	// are harvested before any are resolved, then resolved transitively. Here
+	// @base references @host (above it) and @url references @base (above it),
+	// while @host itself is defined last — all three must still resolve.
+	src := "@url = {{base}}/items\n@base = {{host}}/v2\n\n### List\nGET {{url}}\n\n@host = https://api.test\n"
+	vars := Vars{}
+	steps := Parse(src, vars)
+	if got := vars["url"]; got != "https://api.test/v2/items" {
+		t.Errorf("@url resolved to %q, want %q", got, "https://api.test/v2/items")
+	}
+	// And the step that references it expands the same way at run time.
+	if got := vars.Expand(steps[0].URL); got != "https://api.test/v2/items" {
+		t.Errorf("step URL expanded to %q, want %q", got, "https://api.test/v2/items")
+	}
+}
+
 func TestParseRequestLine(t *testing.T) {
 	// Method defaults to GET, is upper-cased, and a bare URL (with or without a
 	// trailing version token) is read as the URL rather than mistaken for a method.

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,6 +11,11 @@ import (
 	"net/url"
 	"time"
 )
+
+// callbackShutdownGrace bounds how long authCodeFlow waits for the local
+// redirect server to drain in-flight responses (the success/failure page the
+// browser is still receiving) before forcing it down.
+const callbackShutdownGrace = 2 * time.Second
 
 // authCodeWait bounds how long the browser flow waits for the redirect before
 // giving up, so a step doesn't hang forever if the user never finishes signing
@@ -85,9 +91,21 @@ func (c *Cache) authCodeFlow(cfg Config) (cachedToken, error) {
 		writeCallbackPage(w, true)
 		trySend(codes, codeResult{code: code})
 	})
-	srv := &http.Server{Handler: mux}
+	// ReadHeaderTimeout bounds a slow client holding the listener open without
+	// completing a request line — the redirect callback is a single quick GET.
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go srv.Serve(ln)
-	defer srv.Close()
+	// Shut down gracefully rather than srv.Close(): once the handler has sent the
+	// code on the channel and this function returns, an abrupt close can cut the
+	// connection before the browser finishes loading the success page, surfacing a
+	// connection-reset instead. Shutdown lets the in-flight response drain, bounded
+	// by a short grace so a stuck connection can't hang the step. Shutdown also
+	// closes the listener, making the later ln.Close() a no-op.
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), callbackShutdownGrace)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
 
 	// Build and open the authorization URL.
 	authURL, err := buildAuthURL(cfg, redirectURI, state, verifier)
