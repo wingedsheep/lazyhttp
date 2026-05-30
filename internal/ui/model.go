@@ -82,6 +82,12 @@ type Model struct {
 	filter    string
 	filtering bool
 
+	// vis caches the absolute indices of steps passing the active filter. It is
+	// recomputed by refilter() whenever the filter or display names change, so the
+	// several visible() reads per keystroke (cursor math, hit-testing, rendering)
+	// don't re-scan and re-lowercase every step.
+	vis []int
+
 	// envNames lists the environments declared in http-client.env.json (sorted);
 	// envPicking is true while the env picker overlay is open and envCursor marks
 	// the highlighted entry. Switching env reloads the plan against the new vars.
@@ -505,4 +511,5 @@ func (m *Model) refreshLabels() {
 		}
 		m.names[i] = name
 	}
+	m.refilter() // names feed the filter match, so the cache must follow them
 }

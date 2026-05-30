@@ -346,6 +346,15 @@ func parseAssertion(rest string) (step.Assertion, bool) {
 	return a, true
 }
 
+// looksLikeURL reports whether a request-line token is a URL rather than an HTTP
+// method. Methods are bare words (GET, POST, …); a token carrying a scheme,
+// path, or unresolved {{var}} can only be the URL.
+func looksLikeURL(tok string) bool {
+	return strings.Contains(tok, "://") ||
+		strings.HasPrefix(tok, "/") ||
+		strings.HasPrefix(tok, "{{")
+}
+
 // parseHTTP fills in the request line, headers and body of an HTTP step. Values
 // keep their {{var}} placeholders for later expansion.
 func parseHTTP(s step.Step, body string) (step.Step, bool) {
@@ -358,12 +367,14 @@ func parseHTTP(s step.Step, body string) (step.Step, bool) {
 	}
 
 	// Request line: METHOD URL [HTTP/x]. Method is optional and defaults to GET.
+	// When the first field is already a URL (e.g. "https://x.com HTTP/1.1"), treat
+	// it as the URL rather than misreading the URL as the method.
 	fields := strings.Fields(strings.TrimSpace(lines[i]))
 	i++
-	switch len(fields) {
-	case 0:
+	switch {
+	case len(fields) == 0:
 		return s, false
-	case 1:
+	case len(fields) == 1 || looksLikeURL(fields[0]):
 		s.Method, s.URL = "GET", fields[0]
 	default:
 		s.Method, s.URL = strings.ToUpper(fields[0]), fields[1]
