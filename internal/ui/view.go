@@ -620,10 +620,10 @@ func (m Model) requestPreview(s step.Step, expandErr error) string {
 				b.WriteString(lipgloss.NewStyle().Foreground(palette.danger).
 					Render(expandErr.Error()) + "\n")
 			} else if s.Body != "" {
-				b.WriteString(highlightJSON(s.Body, jsonTheme) + "\n")
+				b.WriteString(m.highlightRequestBody(s.Body) + "\n")
 			}
 		case s.Body != "":
-			b.WriteString("\n" + highlightJSON(s.Body, jsonTheme) + "\n")
+			b.WriteString("\n" + m.highlightRequestBody(s.Body) + "\n")
 		}
 	}
 	b.WriteString(m.styles.dim.Render(strings.Repeat("─", min(m.viewport.Width, 40))) + "\n")
@@ -732,6 +732,16 @@ func (m Model) assertLines(r step.Result) string {
 	return b.String()
 }
 
+// highlightRequestBody returns the request-preview body syntax-highlighted,
+// served from the per-body memo when one is present. Bare Models built directly
+// in tests have no memo and highlight directly — the cache is a pure speedup.
+func (m Model) highlightRequestBody(body string) string {
+	if m.reqHL == nil {
+		return highlightJSON(body, jsonTheme)
+	}
+	return m.reqHL.render(body)
+}
+
 // cachedBody returns the syntax-highlighted response body for step i, reusing
 // the value computed when the result arrived and only re-highlighting if the
 // cache is cold (e.g. a model built directly in tests).
@@ -774,8 +784,9 @@ func (m Model) capturedLines(s step.Step, r step.Result) string {
 	}
 	var b strings.Builder
 	b.WriteString("\n\n" + m.styles.paneHeader.Render("CAPTURED") + "\n")
+	eval := capture.For(r)
 	for _, c := range s.Captures {
-		val, ok := capture.Eval(c.Expr, r)
+		val, ok := eval.Eval(c.Expr)
 		if !ok {
 			b.WriteString(lipgloss.NewStyle().Foreground(palette.danger).
 				Render(fmt.Sprintf("%s ← %s (no match)", c.Name, c.Expr)) + "\n")

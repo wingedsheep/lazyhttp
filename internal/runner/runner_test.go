@@ -204,6 +204,35 @@ func TestResponseRefFlowsIntoLaterStep(t *testing.T) {
 	}
 }
 
+// TestLastResultPrefersLatestNamedStep verifies that when a name is reused
+// across the plan, LastResult returns the most recently positioned step that has
+// run — and skips a later same-named step still pending. The name index must
+// preserve this bottom-up scan.
+func TestLastResultPrefersLatestNamedStep(t *testing.T) {
+	p := &Plan{
+		Steps: []step.Step{
+			{Name: "ping", Kind: step.KindHTTP},
+			{Name: "ping", Kind: step.KindHTTP},
+			{Name: "ping", Kind: step.KindHTTP},
+		},
+		Results: []step.Result{
+			{Status: step.Done, StatusCode: 200, Body: `{"n":1}`},
+			{Status: step.Done, StatusCode: 200, Body: `{"n":2}`},
+			{Status: step.Pending}, // last one hasn't run yet
+		},
+	}
+
+	// The latest run step (index 1) wins over the earlier index 0 and the
+	// not-yet-run index 2.
+	r, ok := p.LastResult("ping")
+	if !ok || r.Body != `{"n":2}` {
+		t.Errorf("LastResult(ping) = (%q, %v), want ({\"n\":2}, true)", r.Body, ok)
+	}
+	if _, ok := p.LastResult("absent"); ok {
+		t.Errorf("LastResult(absent) = true, want false")
+	}
+}
+
 // TestAuthResolver verifies a resolver is built only for steps that reference
 // {{$auth.token}}, that config values (here a {{var}} client secret) are
 // expanded against the var set, and that the resolver fetches and attaches a

@@ -34,6 +34,33 @@ func newJSONStyles() jsonStyles {
 // must snapshot it into a local first.
 var jsonTheme = newJSONStyles()
 
+// reqHighlightCache memoizes the syntax-highlighted form of request-preview
+// bodies, keyed by the raw body text. The preview re-renders on every cursor
+// move and resize while it's toggled on (`i`); without this each render re-runs
+// the JSON highlighter over an unchanged body — the response body is already
+// cached in Model.bodyView, the request body was not. It is held by pointer so
+// the value-receiver render methods can populate it, and is dropped on a theme
+// switch — the one thing that changes the colours a given body highlights to. A
+// body that changes (a capture feeding it) is simply a new key, so the cache
+// self-invalidates without explicit clearing.
+type reqHighlightCache struct {
+	entries map[string]string
+}
+
+func newReqHighlightCache() *reqHighlightCache {
+	return &reqHighlightCache{entries: map[string]string{}}
+}
+
+// render returns body highlighted, reusing a prior result for the same text.
+func (c *reqHighlightCache) render(body string) string {
+	if v, ok := c.entries[body]; ok {
+		return v
+	}
+	v := highlightJSON(body, jsonTheme)
+	c.entries[body] = v
+	return v
+}
+
 // highlightJSON colourizes a (pretty-printed) JSON document with st. If s
 // doesn't look like JSON it's returned unchanged, so non-JSON bodies (e.g. shell
 // output) pass through untouched.

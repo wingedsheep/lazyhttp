@@ -50,6 +50,12 @@ type Model struct {
 	names    []string
 	bodyView []string
 
+	// reqHL memoizes request-preview body highlighting, keyed by body text, so
+	// the preview isn't re-colourised on every cursor move/resize. Dropped on a
+	// theme switch (see cycleTheme). nil only on bare test models, which skip the
+	// cache and highlight directly.
+	reqHL *reqHighlightCache
+
 	// spinning is true while a spinner-tick loop is in flight. It lets us drive
 	// the spinner only while a step runs and stay completely idle otherwise.
 	spinning bool
@@ -144,6 +150,7 @@ func New(path, envName string) Model {
 		runFrom:     -1,
 		streamIndex: -1,
 		streamBody:  &strings.Builder{},
+		reqHL:       newReqHighlightCache(),
 		viewport:    viewport.New(0, 0),
 		spinner:     sp,
 		help:        help.New(),
@@ -178,6 +185,9 @@ func (m *Model) cycleTheme() {
 			m.bodyView[i] = highlightJSON(m.plan.Results[i].Body, jsonTheme)
 		}
 	}
+	// The request-body memo holds highlights in the old palette; drop it so the
+	// next preview re-colourises against the new theme.
+	m.reqHL = newReqHighlightCache()
 	m.refreshResult()
 }
 
