@@ -34,7 +34,7 @@ func main() {
 	env := flag.String("env", "", "environment name from http-client.env.json")
 	theme := flag.String("theme", "", "colour theme: "+strings.Join(ui.ThemeNames(), ", ")+" (cycle with `t`)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: lazyhttp [--env NAME] [--theme NAME] <plan.http | dir>   (open the TUI)\n")
+		fmt.Fprintf(os.Stderr, "Usage: lazyhttp [--env NAME] [--theme NAME] [plan.http | dir]   (open the TUI; defaults to .)\n")
 		fmt.Fprintf(os.Stderr, "       lazyhttp run [--env NAME] [--filter SUBSTR] <plan.http>     (headless, for CI)\n")
 		fmt.Fprintf(os.Stderr, "       lazyhttp --version                                          (print version)\n\n")
 		fmt.Fprintf(os.Stderr, "Given a directory, lazyhttp lists the .http/.rest plans beneath it; pick one to\n")
@@ -43,7 +43,15 @@ func main() {
 	}
 	flag.Parse()
 
-	if flag.NArg() != 1 {
+	// With no path argument, default to the current directory (folder mode) — same
+	// as `lazyhttp .`. More than one path is a usage error.
+	target := "."
+	switch flag.NArg() {
+	case 0:
+		// keep the "." default
+	case 1:
+		target = flag.Arg(0)
+	default:
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -62,9 +70,9 @@ func main() {
 
 	// A directory argument opens the folder overview (browse the .http/.rest
 	// plans beneath it, then pick one); a file opens straight into the plan view.
-	var model tea.Model = ui.New(flag.Arg(0), *env)
-	if info, err := os.Stat(flag.Arg(0)); err == nil && info.IsDir() {
-		model = ui.NewApp(flag.Arg(0), *env)
+	var model tea.Model = ui.New(target, *env)
+	if info, err := os.Stat(target); err == nil && info.IsDir() {
+		model = ui.NewApp(target, *env)
 	}
 	// AltScreen keeps lazyhttp full-screen; mouse capture means the wheel
 	// scrolls within the TUI instead of the terminal's scrollback.
