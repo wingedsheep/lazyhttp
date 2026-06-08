@@ -206,7 +206,9 @@ func TestEnvPickerFitsTerminal(t *testing.T) {
 // newModel builds a Model wired to the given plan, for the chain/reset wiring
 // tests that drive onResult directly (no Bubble Tea harness).
 func newModel(p *runner.Plan, runFrom int) Model {
-	m := Model{plan: p, runFrom: runFrom, streamIndex: -1, streamBody: &strings.Builder{}}
+	// runEnd defaults to the last step so a chain started here runs to the plan
+	// end, matching "run from here"; block-bounded runs set it explicitly.
+	m := Model{plan: p, runFrom: runFrom, runEnd: len(p.Steps) - 1, streamIndex: -1, streamBody: &strings.Builder{}}
 	m.refilter() // populate the visible-step cache, as New does via load
 	return m
 }
@@ -262,6 +264,45 @@ func TestRunFromHereChains(t *testing.T) {
 	_, cmd = m.onResult(exec.ResultMsg{Index: 0, Result: step.Result{Status: step.Failed, StatusCode: 500}})
 	if cmd != nil {
 		t.Error("expected chain to stop after failure")
+	}
+}
+
+// TestRunBlockStopsAtGroupEnd verifies a "run block" chain runs through the
+// cursor's @group section and stops once the group changes, leaving the next
+// section untouched.
+func TestRunBlockStopsAtGroupEnd(t *testing.T) {
+	m := newModel(&runner.Plan{
+		Steps: []step.Step{
+			{Name: "a", Group: "G1"},
+			{Name: "b", Group: "G1"},
+			{Name: "c", Group: "G2"},
+		},
+		Results: make([]step.Result, 3),
+	}, 0)
+	// "run block" from step 0 bounds the chain to G1 (indices 0–1).
+	m.runEnd = m.blockEnd(0)
+	if m.runEnd != 1 {
+		t.Fatalf("blockEnd(0) = %d, want 1", m.runEnd)
+	}
+
+	// Step 0 succeeds → chain advances to step 1 (still in G1).
+	updated, cmd := m.onResult(exec.ResultMsg{Index: 0, Result: step.Result{Status: step.Done, StatusCode: 200}})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected chain to continue within the group")
+	}
+	if m.runFrom != 1 {
+		t.Fatalf("runFrom = %d, want 1 after advancing within the group", m.runFrom)
+	}
+
+	// Step 1 succeeds → next step is in G2, past runEnd, so the chain stops.
+	updated, cmd = m.onResult(exec.ResultMsg{Index: 1, Result: step.Result{Status: step.Done, StatusCode: 200}})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Error("expected chain to stop at the group boundary")
+	}
+	if m.runFrom != -1 {
+		t.Errorf("runFrom = %d, want -1 after the block finished", m.runFrom)
 	}
 }
 

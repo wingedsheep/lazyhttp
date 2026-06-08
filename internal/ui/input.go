@@ -216,6 +216,13 @@ func (m Model) listKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.run(m.cursor)
 	case key.Matches(msg, m.keys.RunAll):
 		m.runFrom = m.cursor
+		m.runEnd = len(m.plan.Steps) - 1
+		return m, m.run(m.cursor)
+	case key.Matches(msg, m.keys.RunBlock):
+		// Run the cursor's @group section: from here to the last step sharing
+		// the group, chaining like run-from-here but bounded to the block.
+		m.runFrom = m.cursor
+		m.runEnd = m.blockEnd(m.cursor)
 		return m, m.run(m.cursor)
 	}
 	return m, nil

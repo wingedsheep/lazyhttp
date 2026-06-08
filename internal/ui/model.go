@@ -126,9 +126,13 @@ type Model struct {
 	notice   string
 	noticeOK bool
 
-	// runFrom >= 0 means a "run from here" chain is active; it stops on the
-	// first failure or the end of the plan.
+	// runFrom >= 0 means a chain run is active; it holds the index of the step
+	// currently in flight. runEnd is the last step index the chain may reach
+	// (inclusive). The chain stops on the first failure, after runEnd, or at the
+	// end of the plan. "run from here" (a) sets runEnd to the last step; "run
+	// block" (A) sets it to the end of the cursor's contiguous @group section.
 	runFrom int
+	runEnd  int
 
 	viewport viewport.Model
 	spinner  spinner.Model
@@ -343,10 +347,12 @@ func (m Model) onResult(msg exec.ResultMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Chain: continue to the next step unless this one failed (transport, bad
-	// status, or a failed assertion) or we're done.
+	// status, or a failed assertion), we've passed the chain's end bound (runEnd
+	// — the plan end for "run from here", the group end for "run block"), or
+	// we're out of steps.
 	if m.runFrom >= 0 && msg.Index == m.runFrom {
 		next := msg.Index + 1
-		if msg.Index < len(m.plan.Results) && m.plan.Results[msg.Index].OK() && next < len(m.plan.Steps) {
+		if msg.Index < len(m.plan.Results) && m.plan.Results[msg.Index].OK() && next <= m.runEnd && next < len(m.plan.Steps) {
 			m.runFrom = next
 			return m, m.run(next)
 		}
@@ -535,6 +541,21 @@ func (m Model) capturingInput() bool {
 // ignore instead pops back to the overview (one level up).
 func (m Model) escWouldConsume() bool {
 	return m.envPicking || m.filtering || m.filter != ""
+}
+
+// blockEnd returns the index of the last step contiguous with i that shares
+// i's @group, scanning forward — i.e. the end of the section i belongs to.
+// Steps with the same Group value sit contiguously (groups are sections), so a
+// forward walk while the group matches finds the boundary. Ungrouped steps
+// (Group == "") form their own run between groups, so this works for them too:
+// a lone ungrouped step just returns i. Used by "run block" to bound the chain.
+func (m Model) blockEnd(i int) int {
+	g := m.plan.Steps[i].Group
+	end := i
+	for end+1 < len(m.plan.Steps) && m.plan.Steps[end+1].Group == g {
+		end++
+	}
+	return end
 }
 
 // anyRunning reports whether at least one step is mid-flight.

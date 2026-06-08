@@ -146,6 +146,7 @@ a named environment and its values fill in `{{vars}}`:
 | `^u` / `^d`    | half-page up / down     |
 | `enter` / `e`  | run the selected step   |
 | `a`            | run from here onward    |
+| `A`            | run the current block (group section) |
 | `r`            | reload the file         |
 | `c` / `C`      | clear result / clear all|
 | `i`            | toggle request preview  |
