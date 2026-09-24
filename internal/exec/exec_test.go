@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -220,5 +221,28 @@ func TestRunShell(t *testing.T) {
 	}
 	if got := strings.TrimSpace(msg.Result.Body); got != "hello" {
 		t.Errorf("shell output: want %q, got %q", "hello", got)
+	}
+}
+
+func TestHostHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, r.Host)
+	}))
+	defer srv.Close()
+	for _, stream := range []bool{false, true} {
+		t.Run(strconv.FormatBool(stream), func(t *testing.T) {
+			s := step.Step{Method: "GET", URL: srv.URL, Stream: stream,
+				Headers: map[string]string{"hOsT": "virtual.example"}}
+			var result step.Result
+			if stream {
+				_, terminal := drain(t, RunStream(0, s, nil))
+				result = terminal.(ResultMsg).Result
+			} else {
+				result = Do(s, nil)
+			}
+			if !result.OK() || result.Body != "virtual.example" {
+				t.Fatalf("Host override failed: %+v", result)
+			}
+		})
 	}
 }

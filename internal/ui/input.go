@@ -3,8 +3,8 @@ package ui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
@@ -21,12 +21,12 @@ const wheelStep = 3
 // and the folder browser, which scroll identically.
 func wheelScroll(button tea.MouseButton, accum *int, move func(int)) {
 	switch button {
-	case tea.MouseButtonWheelUp:
+	case tea.MouseWheelUp:
 		if *accum > 0 {
 			*accum = 0
 		}
 		*accum--
-	case tea.MouseButtonWheelDown:
+	case tea.MouseWheelDown:
 		if *accum < 0 {
 			*accum = 0
 		}
@@ -48,18 +48,20 @@ func wheelScroll(button tea.MouseButton, accum *int, move func(int)) {
 // and, on a step row in the list, runs that step. The scroll wheel scrolls the
 // response body when that pane is focused, otherwise it moves through the list.
 func (m Model) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+	mouse := msg.Mouse()
+	_, click := msg.(tea.MouseClickMsg)
+	if click && mouse.Button == tea.MouseLeft {
 		if m.envPicking || m.filtering {
 			return m, nil // a modal owns the screen; ignore stray clicks
 		}
-		// The list pane occupies the leftmost listW+4 columns (content + padding +
-		// border); anything to the right is the result pane.
-		if msg.X >= m.listW+4 {
+		// The list width includes padding; add two columns for its border.
+		// Anything to the right is the result pane.
+		if mouse.X >= m.listW+2 {
 			m.focus = focusResult
 			return m, nil
 		}
 		m.focus = focusList
-		if i, ok := m.stepAtRow(msg.Y); ok {
+		if i, ok := m.stepAtRow(mouse.Y); ok {
 			m.setCursor(i)
 			return m, m.run(i)
 		}
@@ -72,11 +74,11 @@ func (m Model) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	// Otherwise the wheel moves the list cursor, one step per physical notch.
-	wheelScroll(msg.Button, &m.wheelAccum, m.moveCursor)
+	wheelScroll(mouse.Button, &m.wheelAccum, m.moveCursor)
 	return m, nil
 }
 
-func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// While the env picker is open it owns the keyboard until a choice is made
 	// or it's dismissed, so every other binding is bypassed.
 	if m.envPicking {
@@ -94,7 +96,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	// Esc clears an applied filter when one is active.
-	case msg.Type == tea.KeyEsc:
+	case msg.Code == tea.KeyEscape:
 		if m.filter != "" {
 			m.filter = ""
 			m.refilter()
@@ -179,7 +181,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // listKey handles navigation and execution while the step list is focused.
-func (m Model) listKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) listKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Up):
 		m.moveCursor(-1)
@@ -231,34 +233,34 @@ func (m Model) listKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // filterKey edits the live filter query: most keys append/erase characters,
 // while Esc clears it, Enter applies it, and the arrows still move the cursor
 // through the matches so you can type-then-pick in one motion.
-func (m Model) filterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC:
+func (m Model) filterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.String() == "ctrl+c":
 		return m, tea.Quit
-	case tea.KeyEsc:
+	case msg.Code == tea.KeyEscape:
 		m.filtering = false
 		m.filter = ""
 		m.refilter()
 		m.snapCursor()
 		m.refreshResult()
 		return m, nil
-	case tea.KeyEnter:
+	case msg.Code == tea.KeyEnter:
 		m.filtering = false // keep the query; just leave edit mode
 		return m, nil
-	case tea.KeyUp:
+	case msg.Code == tea.KeyUp:
 		m.moveCursor(-1)
 		return m, nil
-	case tea.KeyDown:
+	case msg.Code == tea.KeyDown:
 		m.moveCursor(1)
 		return m, nil
-	case tea.KeyBackspace:
+	case msg.Code == tea.KeyBackspace:
 		if r := []rune(m.filter); len(r) > 0 {
 			m.filter = string(r[:len(r)-1])
 		}
-	case tea.KeySpace:
+	case msg.Code == tea.KeySpace:
 		m.filter += " "
-	case tea.KeyRunes:
-		m.filter += string(msg.Runes)
+	case msg.Text != "":
+		m.filter += msg.Text
 	default:
 		return m, nil
 	}
@@ -356,4 +358,17 @@ func (m *Model) toggleFocus() {
 // pageStep is the half-page jump distance for ctrl+d / ctrl+u.
 func (m Model) pageStep() int {
 	return max(1, (m.height-6)/2)
+}
+
+// singleLine keeps pasted text inside the filter or command bar.
+func singleLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		if r < ' ' || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 }

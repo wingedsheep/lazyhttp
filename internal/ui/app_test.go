@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
 	"github.com/wingedsheep/lazyhttp/internal/step"
@@ -29,7 +29,7 @@ func writePlan(t *testing.T, root, rel, body string) string {
 func typeRunes(t *testing.T, model tea.Model, s string) tea.Model {
 	t.Helper()
 	for _, r := range s {
-		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model, _ = model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	return model
 }
@@ -37,7 +37,7 @@ func typeRunes(t *testing.T, model tea.Model, s string) tea.Model {
 // press sends a key and, if the update returns a command (e.g. the browser's
 // "open" emits openPlanMsg via a tea.Cmd), runs it and feeds the resulting
 // message back — mirroring what the Bubble Tea runtime does.
-func press(t *testing.T, model tea.Model, key tea.KeyMsg) tea.Model {
+func press(t *testing.T, model tea.Model, key tea.KeyPressMsg) tea.Model {
 	t.Helper()
 	model, cmd := model.Update(key)
 	if cmd != nil {
@@ -58,7 +58,7 @@ func TestBrowserListsPlans(t *testing.T) {
 	var model tea.Model = NewApp(root, "")
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	out := ansiRe.ReplaceAllString(model.View(), "")
+	out := ansiRe.ReplaceAllString(model.View().Content, "")
 	for _, want := range []string{"PLANS", "root.http", "users.rest", "api"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("overview missing %q:\n%s", want, out)
@@ -79,22 +79,22 @@ func TestOpenPlanAndReturn(t *testing.T) {
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	// Enter opens the plan under the cursor; the plan view shows the step list.
-	model = press(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = press(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if app := model.(App); !app.showPlan {
 		t.Fatal("expected plan view foreground after enter")
 	}
-	if out := ansiRe.ReplaceAllString(model.View(), ""); !strings.Contains(out, "STEPS") {
+	if out := ansiRe.ReplaceAllString(model.View().Content, ""); !strings.Contains(out, "STEPS") {
 		t.Fatalf("plan view missing STEPS header:\n%s", out)
 	}
 
 	// `:files` returns to the overview.
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model, _ = model.Update(tea.KeyPressMsg{Code: ':', Text: string(':')})
 	model = typeRunes(t, model, "files")
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if app := model.(App); app.showPlan {
 		t.Fatal("expected overview foreground after :files")
 	}
-	if out := ansiRe.ReplaceAllString(model.View(), ""); !strings.Contains(out, "PLANS") {
+	if out := ansiRe.ReplaceAllString(model.View().Content, ""); !strings.Contains(out, "PLANS") {
 		t.Fatalf("overview not shown after :files:\n%s", out)
 	}
 }
@@ -107,10 +107,10 @@ func TestUnknownCommandKeepsBarOpen(t *testing.T) {
 
 	var model tea.Model = NewApp(root, "")
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	model = press(t, model, tea.KeyMsg{Type: tea.KeyEnter}) // open plan
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	model = press(t, model, tea.KeyPressMsg{Code: tea.KeyEnter}) // open plan
+	model, _ = model.Update(tea.KeyPressMsg{Code: ':', Text: string(':')})
 	model = typeRunes(t, model, "nope")
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	app := model.(App)
 	if !app.cmdActive {
@@ -129,10 +129,10 @@ func TestBrowserFilter(t *testing.T) {
 
 	var model tea.Model = NewApp(root, "")
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model, _ = model.Update(tea.KeyPressMsg{Code: '/', Text: string('/')})
 	model = typeRunes(t, model, "order")
 
-	out := ansiRe.ReplaceAllString(model.View(), "")
+	out := ansiRe.ReplaceAllString(model.View().Content, "")
 	if !strings.Contains(out, "orders.http") || strings.Contains(out, "users.http") {
 		t.Errorf("filter did not narrow to orders.http:\n%s", out)
 	}
@@ -158,11 +158,11 @@ func TestEscReturnsToOverview(t *testing.T) {
 
 	var model tea.Model = NewApp(root, "")
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	model = press(t, model, tea.KeyMsg{Type: tea.KeyEnter}) // open
+	model = press(t, model, tea.KeyPressMsg{Code: tea.KeyEnter}) // open
 	if !model.(App).showPlan {
 		t.Fatal("expected plan view after enter")
 	}
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if model.(App).showPlan {
 		t.Fatal("Esc should return to the overview")
 	}
@@ -176,18 +176,18 @@ func TestEscClearsFilterBeforeLeaving(t *testing.T) {
 
 	var model tea.Model = NewApp(root, "")
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	model = press(t, model, tea.KeyMsg{Type: tea.KeyEnter}) // open
+	model = press(t, model, tea.KeyPressMsg{Code: tea.KeyEnter}) // open
 
 	// Apply a filter inside the plan: `/`, type, Enter.
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model, _ = model.Update(tea.KeyPressMsg{Code: '/', Text: string('/')})
 	model = typeRunes(t, model, "zzz")
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc}) // clears filter, stays in plan
+	model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape}) // clears filter, stays in plan
 	if !model.(App).showPlan {
 		t.Fatal("first Esc should clear the filter, not leave the plan")
 	}
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc}) // now pops up
+	model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape}) // now pops up
 	if model.(App).showPlan {
 		t.Fatal("second Esc should return to the overview")
 	}
@@ -201,7 +201,7 @@ func TestUnresolvedVarFailsStep(t *testing.T) {
 
 	var model tea.Model = New(p, "")
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	model = press(t, model, tea.KeyMsg{Type: tea.KeyEnter}) // run step 0
+	model = press(t, model, tea.KeyPressMsg{Code: tea.KeyEnter}) // run step 0
 
 	r := model.(Model).plan.Results[0]
 	if r.Status != step.Failed || r.Err == nil || !strings.Contains(r.Err.Error(), "unresolved") {
@@ -217,7 +217,7 @@ func TestCopyNotRunNotice(t *testing.T) {
 
 	var model tea.Model = New(p, "")
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	model = press(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	model = press(t, model, tea.KeyPressMsg{Code: 'y', Text: string('y')})
 
 	if n := model.(Model).notice; !strings.Contains(n, "nothing to copy") {
 		t.Fatalf("expected a 'nothing to copy' notice, got %q", n)

@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/capture"
 	"github.com/wingedsheep/lazyhttp/internal/step"
@@ -61,7 +61,7 @@ type StreamSub struct {
 	index   int
 	events  <-chan streamEvent
 	cancel  context.CancelFunc
-	discard int32         // atomic; set by Cancel so WaitForChunk drops buffered events
+	discard atomic.Bool   // atomic; set by Cancel so WaitForChunk drops buffered events
 	gone    chan struct{} // closed by Cancel so the pump stops trying to deliver them
 }
 
@@ -88,7 +88,7 @@ func (s *StreamSub) Cancel() {
 	}
 	// Close gone exactly once, before cancelling, so a pump blocked on a send
 	// unblocks rather than waiting for a consumer that has given up.
-	if atomic.CompareAndSwapInt32(&s.discard, 0, 1) {
+	if s.discard.CompareAndSwap(false, true) {
 		close(s.gone)
 	}
 	if s.cancel != nil {
@@ -96,7 +96,7 @@ func (s *StreamSub) Cancel() {
 	}
 }
 
-func (s *StreamSub) isDiscarded() bool { return atomic.LoadInt32(&s.discard) == 1 }
+func (s *StreamSub) isDiscarded() bool { return s.discard.Load() }
 
 // streamEvent is one item from the pump goroutine: a body slice (done == false)
 // or the terminal event carrying the finished Result (done == true).
@@ -124,21 +124,11 @@ func RunStream(index int, s step.Step, auth AuthResolver) tea.Cmd {
 			}
 		}
 
-		var bodyReader io.Reader
-		if s.Body != "" {
-			bodyReader = strings.NewReader(s.Body)
-		}
 		ctx, cancel := context.WithCancel(context.Background())
-		req, err := http.NewRequestWithContext(ctx, s.Method, s.URL, bodyReader)
+		req, err := newRequest(ctx, s)
 		if err != nil {
 			cancel()
 			return fail(err)
-		}
-		for k, v := range s.Headers {
-			if strings.EqualFold(k, "Authorization") {
-				v = encodeBasicAuth(v)
-			}
-			req.Header.Set(k, v)
 		}
 
 		resp, err := clientFor(s).Do(req)
@@ -149,11 +139,14 @@ func RunStream(index int, s step.Step, auth AuthResolver) tea.Cmd {
 
 		events := make(chan streamEvent, 32)
 		gone := make(chan struct{})
-		if s.StreamThrough != "" {
-			go pumpThrough(ctx, resp, s, start, events, gone)
-		} else {
-			go pump(resp, s, start, events)
-		}
+		go func() {
+			defer cancel()
+			if s.StreamThrough != "" {
+				pumpThrough(ctx, resp, s, start, events, gone)
+			} else {
+				pump(resp, s, start, events, gone)
+			}
+		}()
 		return StreamStartMsg{Index: index, Sub: &StreamSub{
 			index: index, events: events, cancel: cancel, gone: gone}}
 	}
@@ -163,7 +156,7 @@ func RunStream(index int, s step.Step, auth AuthResolver) tea.Cmd {
 // terminal event with the accumulated Result when the stream ends (EOF, a read
 // error, or context cancellation). It always closes resp.Body and the events
 // channel, so WaitForChunk's loop terminates and the goroutine never leaks.
-func pump(resp *http.Response, s step.Step, start time.Time, events chan<- streamEvent) {
+func pump(resp *http.Response, s step.Step, start time.Time, events chan<- streamEvent, gone <-chan struct{}) {
 	defer close(events)
 	defer resp.Body.Close()
 
@@ -172,12 +165,12 @@ func pump(resp *http.Response, s step.Step, start time.Time, events chan<- strea
 	if s.StreamExtract != "" {
 		ext = &sseExtractor{path: s.StreamExtract}
 	}
-	emit := func(out string) {
+	emit := func(out string) bool {
 		if out == "" {
-			return
+			return true
 		}
 		acc.WriteString(out)
-		events <- streamEvent{data: out}
+		return sendEvent(events, gone, streamEvent{data: out})
 	}
 
 	buf := make([]byte, 4096)
@@ -191,7 +184,9 @@ func pump(resp *http.Response, s step.Step, start time.Time, events chan<- strea
 				// (keepalive comments, the data: envelope, [DONE]) is dropped.
 				chunk = ext.feed(chunk)
 			}
-			emit(chunk)
+			if !emit(chunk) {
+				return
+			}
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
@@ -202,7 +197,9 @@ func pump(resp *http.Response, s step.Step, start time.Time, events chan<- strea
 	}
 	if ext != nil {
 		// Flush any field left in a trailing line that had no closing newline.
-		emit(ext.flush())
+		if !emit(ext.flush()) {
+			return
+		}
 	}
 
 	res := step.Result{
@@ -220,7 +217,7 @@ func pump(resp *http.Response, s step.Step, start time.Time, events chan<- strea
 		res.Status = step.Failed
 		res.Err = readErr
 	}
-	events <- streamEvent{done: true, result: res}
+	sendEvent(events, gone, streamEvent{done: true, result: res})
 }
 
 // WaitForChunk returns a command that blocks until the next event from sub
@@ -329,12 +326,7 @@ func pumpThrough(ctx context.Context, resp *http.Response, s step.Step, start ti
 	// merely because ctx was cancelled — a Stop cancels ctx to halt reading yet
 	// still wants the partial terminal result delivered.
 	send := func(ev streamEvent) bool {
-		select {
-		case events <- ev:
-			return true
-		case <-gone:
-			return false
-		}
+		return sendEvent(events, gone, ev)
 	}
 
 	fail := func(err error) {
@@ -456,4 +448,14 @@ func transformError(err error, stderr string) error {
 		return fmt.Errorf("@stream-through: %s", stderr)
 	}
 	return fmt.Errorf("@stream-through: %w", err)
+}
+
+// sendEvent also unblocks when the UI abandons a full event queue.
+func sendEvent(events chan<- streamEvent, gone <-chan struct{}, ev streamEvent) bool {
+	select {
+	case events <- ev:
+		return true
+	case <-gone:
+		return false
+	}
 }

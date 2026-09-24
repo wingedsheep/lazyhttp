@@ -2,10 +2,11 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
@@ -191,7 +192,7 @@ func (m Model) renderRow(i int, conn string, innerW int) string {
 	s := m.plan.Steps[i]
 	sel := i == m.cursor
 
-	caret, caretColor := " ", lipgloss.TerminalColor(palette.subtle)
+	caret, caretColor := " ", color.Color(palette.subtle)
 	if sel {
 		caret, caretColor = "▸", palette.accent
 	}
@@ -231,7 +232,7 @@ func (m Model) glyph(i int, sel bool) string {
 	if r.Status == step.Running {
 		return m.spinner.View() // already styled by the spinner widget
 	}
-	g, c := "○", lipgloss.TerminalColor(palette.subtle)
+	g, c := "○", color.Color(palette.subtle)
 	if r.Status == step.Done || r.Status == step.Failed {
 		switch {
 		case r.Err != nil, !r.AssertsPass():
@@ -249,7 +250,7 @@ func (m Model) glyph(i int, sel bool) string {
 }
 
 // methodBadge returns the short verb label and colour for a step's list row.
-func methodBadge(s step.Step) (string, lipgloss.TerminalColor) {
+func methodBadge(s step.Step) (string, color.Color) {
 	if s.Kind == step.KindShell {
 		return "SH", palette.teal
 	}
@@ -258,7 +259,7 @@ func methodBadge(s step.Step) (string, lipgloss.TerminalColor) {
 
 // listStatus returns the right-aligned status text (HTTP code or shell exit
 // code) and its colour. Steps that haven't finished show nothing.
-func (m Model) listStatus(i int) (string, lipgloss.TerminalColor) {
+func (m Model) listStatus(i int) (string, color.Color) {
 	r := m.plan.Results[i]
 	if r.Status != step.Done && r.Status != step.Failed {
 		return "", palette.subtle

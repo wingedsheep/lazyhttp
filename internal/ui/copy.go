@@ -3,7 +3,7 @@ package ui
 import (
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/clipboard"
 	"github.com/wingedsheep/lazyhttp/internal/step"

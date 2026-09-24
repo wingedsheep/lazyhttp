@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/exec"
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
@@ -169,7 +169,7 @@ func New(path, envName string) Model {
 		streamIndex: -1,
 		streamBody:  &strings.Builder{},
 		reqHL:       newReqHighlightCache(),
-		viewport:    viewport.New(0, 0),
+		viewport:    viewport.New(viewport.WithWidth(0), viewport.WithHeight(0)),
 		spinner:     sp,
 		help:        help.New(),
 		keys:        newKeyMap(),
@@ -197,9 +197,13 @@ func (m *Model) applyStyles() {
 // re-highlighting any response bodies so the whole UI recolours at once.
 func (m *Model) cycleTheme() {
 	applyTheme(activeTheme + 1)
+	m.refreshStyles()
+}
+
+func (m *Model) refreshStyles() {
 	m.applyStyles()
-	for i := range m.plan.Results {
-		if i < len(m.bodyView) && m.bodyView[i] != "" {
+	for i := range m.bodyView {
+		if m.plan != nil && i < len(m.plan.Results) && m.bodyView[i] != "" {
 			m.bodyView[i] = highlightJSON(m.plan.Results[i].Body, jsonTheme)
 		}
 	}
@@ -241,14 +245,22 @@ func (m *Model) load() {
 	m.layout()
 }
 
-// Init starts idle: the spinner only ticks once a step is running (see run),
-// so an untouched UI performs zero redraws.
+// Init queries the background once; the spinner starts only when a step runs.
 func (m Model) Init() tea.Cmd {
-	return nil
+	return tea.RequestBackgroundColor
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		setBackground(msg.IsDark())
+		m.refreshStyles()
+		return m, nil
+	case tea.PasteMsg:
+		if m.filtering {
+			return m.filterKey(tea.KeyPressMsg{Text: singleLine(msg.Content)})
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
@@ -303,7 +315,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		return m.onMouse(msg)
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.onKey(msg)
 	}
 	return m, nil

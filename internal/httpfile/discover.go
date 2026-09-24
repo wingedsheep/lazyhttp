@@ -1,10 +1,11 @@
 package httpfile
 
 import (
+	"cmp"
 	"io/fs"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -49,6 +50,9 @@ func DiscoverPlans(root string) PlanIndex {
 	idx := PlanIndex{Root: abs}
 	idx.Err = filepath.WalkDir(abs, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if path == abs {
+				return err
+			}
 			return nil // skip an unreadable dir/file instead of failing the whole walk
 		}
 		if d.IsDir() {
@@ -75,8 +79,8 @@ func DiscoverPlans(root string) PlanIndex {
 	})
 	// Sort by Rel: this keeps same-directory entries contiguous (Rel shares the
 	// Dir prefix), so the UI can emit a group heading whenever Dir changes.
-	sort.Slice(idx.Files, func(i, j int) bool {
-		return idx.Files[i].Rel < idx.Files[j].Rel
+	slices.SortFunc(idx.Files, func(a, b PlanFile) int {
+		return cmp.Compare(a.Rel, b.Rel)
 	})
 	return idx
 }

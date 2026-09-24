@@ -3,9 +3,9 @@ package ui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/exec"
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
@@ -43,11 +43,23 @@ func NewApp(root, envName string) App {
 	}
 }
 
-// Init starts idle: like the plan view, nothing animates until a step runs.
-func (a App) Init() tea.Cmd { return nil }
+// Init queries the terminal background without starting an animation loop.
+func (a App) Init() tea.Cmd { return tea.RequestBackgroundColor }
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		setBackground(msg.IsDark())
+		a.browser.applyStyles()
+		if a.planOpen {
+			a.plan.refreshStyles()
+		}
+		return a, nil
+	case tea.PasteMsg:
+		if a.cmdActive {
+			return a.cmdKey(tea.KeyPressMsg{Text: singleLine(msg.Content)})
+		}
+		return a.routeToForeground(msg)
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
 		// Size both views so whichever is foregrounded is already laid out.
@@ -73,7 +85,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return a.onKey(msg)
 	}
 
@@ -83,7 +95,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // onKey handles the command bar, the `:` that opens it, and otherwise routes to
 // the foreground view.
-func (a App) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (a App) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if a.cmdActive {
 		return a.cmdKey(msg)
 	}
@@ -97,7 +109,7 @@ func (a App) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Esc pops one level up: from an open plan back to the overview — but only
 	// when the plan itself has no use for it (no env picker, filter editor, or
 	// applied filter to clear first).
-	if a.showPlan && msg.Type == tea.KeyEsc && !a.plan.escWouldConsume() {
+	if a.showPlan && msg.Code == tea.KeyEscape && !a.plan.escWouldConsume() {
 		a.showPlan = false
 		return a, nil
 	}
@@ -143,24 +155,24 @@ func (a App) forwardToPlan(msg tea.Msg) Model {
 
 // cmdKey edits the `:` command bar: runes/backspace edit the text, Enter runs
 // it, Esc cancels.
-func (a App) cmdKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC:
+func (a App) cmdKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.String() == "ctrl+c":
 		return a, tea.Quit
-	case tea.KeyEsc:
+	case msg.Code == tea.KeyEscape:
 		a.cmdActive, a.cmdInput, a.cmdErr = false, "", ""
-	case tea.KeyEnter:
+	case msg.Code == tea.KeyEnter:
 		return a.runCommand()
-	case tea.KeyBackspace:
+	case msg.Code == tea.KeyBackspace:
 		if r := []rune(a.cmdInput); len(r) > 0 {
 			a.cmdInput = string(r[:len(r)-1])
 		}
 		a.cmdErr = ""
-	case tea.KeySpace:
+	case msg.Code == tea.KeySpace:
 		a.cmdInput += " "
 		a.cmdErr = ""
-	case tea.KeyRunes:
-		a.cmdInput += string(msg.Runes)
+	case msg.Text != "":
+		a.cmdInput += msg.Text
 		a.cmdErr = ""
 	}
 	return a, nil
@@ -184,10 +196,12 @@ func (a App) runCommand() (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-func (a App) View() string {
+func (a App) View() tea.View { return terminalView(a.render()) }
+
+func (a App) render() string {
 	base := a.browser.View()
 	if a.showPlan {
-		base = a.plan.View()
+		base = a.plan.render()
 	}
 	if !a.cmdActive {
 		return base

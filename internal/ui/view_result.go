@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/capture"
 	"github.com/wingedsheep/lazyhttp/internal/step"
@@ -15,7 +15,7 @@ import (
 
 // refreshResult renders the selected step's request/response into the viewport.
 func (m *Model) refreshResult() {
-	if len(m.plan.Steps) == 0 {
+	if m.plan == nil || len(m.plan.Steps) == 0 {
 		m.viewport.SetContent("")
 		return
 	}
@@ -46,7 +46,7 @@ func (m *Model) refreshStreamHead() {
 // renderResult draws the result pane: a header (with a scroll indicator when
 // the body overflows) plus the scrollable viewport.
 func (m Model) renderResult() string {
-	w := m.viewport.Width
+	w := m.viewport.Width()
 	label := "RESPONSE"
 	if ind := m.scrollIndicator(); ind != "" {
 		gap := max(w-lipgloss.Width(label)-lipgloss.Width(ind), 1)
@@ -59,7 +59,7 @@ func (m Model) renderResult() string {
 // scrollIndicator reports the scroll position of the response body, but only
 // when it's taller than the viewport. Arrows dim out at the top/bottom.
 func (m Model) scrollIndicator() string {
-	if m.viewport.TotalLineCount() <= m.viewport.Height {
+	if m.viewport.TotalLineCount() <= m.viewport.Height() {
 		return ""
 	}
 	up, down := "↑", "↓"
@@ -143,7 +143,7 @@ func (m Model) requestPreview(s step.Step, expandErr error) string {
 			b.WriteString("\n" + m.highlightRequestBody(s.Body) + "\n")
 		}
 	}
-	b.WriteString(m.styles.dim.Render(strings.Repeat("─", min(m.viewport.Width, 40))) + "\n")
+	b.WriteString(m.styles.dim.Render(strings.Repeat("─", min(m.viewport.Width(), 40))) + "\n")
 	return b.String()
 }
 
@@ -244,7 +244,7 @@ func (m Model) assertLines(r step.Result) string {
 			}
 			line += m.styles.dim.Render("  (" + note + ")")
 		}
-		b.WriteString(truncate(line, m.viewport.Width) + "\n")
+		b.WriteString(truncate(line, m.viewport.Width()) + "\n")
 	}
 	return b.String()
 }
@@ -285,7 +285,7 @@ func (m Model) capturedLines(s step.Step, r step.Result) string {
 			continue
 		}
 		b.WriteString(m.styles.method.Foreground(palette.success).Render(c.Name) +
-			m.styles.dim.Render(" = ") + truncate(val, m.viewport.Width-len(c.Name)-4) + "\n")
+			m.styles.dim.Render(" = ") + truncate(val, m.viewport.Width()-len(c.Name)-4) + "\n")
 	}
 	return b.String()
 }

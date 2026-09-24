@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/exec"
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
@@ -30,10 +30,10 @@ func TestRender(t *testing.T) {
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 
 	// Navigate down and toggle focus; none of this should panic.
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 
-	out := model.View()
+	out := model.View().Content
 	for _, want := range []string{"lazyhttp", "STEPS", "RESPONSE"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("view missing %q", want)
@@ -50,14 +50,14 @@ func TestRequestPreviewToggle(t *testing.T) {
 	// Move the cursor to the "Create product" step (the one with a JSON body).
 	const bodyMarker = "price"
 	for range indexOfBody(m.plan.Steps, bodyMarker) {
-		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 
-	if strings.Contains(model.View(), bodyMarker) {
+	if strings.Contains(model.View().Content, bodyMarker) {
 		t.Error("request body should be hidden by default")
 	}
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
-	if !strings.Contains(model.View(), bodyMarker) {
+	model, _ = model.Update(tea.KeyPressMsg{Code: 'i', Text: string('i')})
+	if !strings.Contains(model.View().Content, bodyMarker) {
 		t.Error("request body should appear after pressing i")
 	}
 }
@@ -83,17 +83,17 @@ func TestEnvNoticeMissing(t *testing.T) {
 
 	var model tea.Model = m
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	if !strings.Contains(model.View(), "ecc-test") {
+	if !strings.Contains(model.View().Content, "ecc-test") {
 		t.Error("view should render the env notice")
 	}
 
 	// E with no environments explains discovery instead of opening an empty modal.
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'E'}})
+	model, _ = model.Update(tea.KeyPressMsg{Code: 'E', Text: string('E')})
 	got := model.(Model)
 	if got.envPicking {
 		t.Error("E should not open the picker when there are no environments")
 	}
-	if !strings.Contains(got.notice, "no environments") || !strings.Contains(got.View(), "no environments") {
+	if !strings.Contains(got.notice, "no environments") || !strings.Contains(got.View().Content, "no environments") {
 		t.Errorf("notice = %q, want it to explain where discovery searched", got.notice)
 	}
 }
@@ -128,16 +128,16 @@ func TestEnvPicker(t *testing.T) {
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 
 	// Open the picker.
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'E'}})
+	model, _ = model.Update(tea.KeyPressMsg{Code: 'E', Text: string('E')})
 	if !model.(Model).envPicking {
 		t.Fatal("E should open the env picker")
 	}
-	if !strings.Contains(model.View(), "SELECT ENVIRONMENT") {
+	if !strings.Contains(model.View().Content, "SELECT ENVIRONMENT") {
 		t.Error("picker view should show its title")
 	}
 
 	// Esc cancels without switching.
-	cancelled, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	cancelled, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if cancelled.(Model).envPicking {
 		t.Error("esc should close the picker")
 	}
@@ -146,9 +146,9 @@ func TestEnvPicker(t *testing.T) {
 	}
 
 	// Re-open, move to the next env, and apply it.
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'E'}})
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = model.Update(tea.KeyPressMsg{Code: 'E', Text: string('E')})
+	model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	got := model.(Model)
 	if got.envPicking {
@@ -158,7 +158,7 @@ func TestEnvPicker(t *testing.T) {
 	if got.envName != want {
 		t.Errorf("envName = %q, want %q", got.envName, want)
 	}
-	if !strings.Contains(got.View(), "env:"+want) {
+	if !strings.Contains(got.View().Content, "env:"+want) {
 		t.Errorf("status bar should show the switched env %q", want)
 	}
 }
@@ -172,18 +172,18 @@ func TestEnvPickerNone(t *testing.T) {
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 
 	// Open the picker (cursor on the current "dev"), move up to "(none)", apply.
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'E'}})
-	if !strings.Contains(model.View(), "(none)") {
+	model, _ = model.Update(tea.KeyPressMsg{Code: 'E', Text: string('E')})
+	if !strings.Contains(model.View().Content, "(none)") {
 		t.Error("picker should offer a (none) option")
 	}
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
-	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	got := model.(Model)
 	if got.envName != "" {
 		t.Errorf("envName = %q, want empty", got.envName)
 	}
-	if !strings.Contains(got.View(), "env:(none)") {
+	if !strings.Contains(got.View().Content, "env:(none)") {
 		t.Error("status bar should show env:(none) when no environment is selected")
 	}
 }
@@ -196,8 +196,8 @@ func TestEnvPickerFitsTerminal(t *testing.T) {
 		m := New(filepath.Join("..", "..", "example.http"), "dev")
 		var model tea.Model = m
 		model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: rows})
-		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'E'}})
-		if got := strings.Count(model.View(), "\n") + 1; got > rows {
+		model, _ = model.Update(tea.KeyPressMsg{Code: 'E', Text: string('E')})
+		if got := strings.Count(model.View().Content, "\n") + 1; got > rows {
 			t.Errorf("rows=%d: picker view is %d lines, exceeds terminal", rows, got)
 		}
 	}
@@ -397,7 +397,7 @@ func TestStreamChunksAccumulate(t *testing.T) {
 	if b := got.plan.Results[0].Body; b != "" {
 		t.Errorf("Result.Body should stay empty mid-stream, got %q", b)
 	}
-	if v := got.View(); !strings.Contains(v, "hello world!") || !strings.Contains(v, "streaming") {
+	if v := got.View().Content; !strings.Contains(v, "hello world!") || !strings.Contains(v, "streaming") {
 		t.Errorf("view missing live stream body/indicator; got:\n%s", v)
 	}
 

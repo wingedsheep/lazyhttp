@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`lazyhttp` is a terminal UI (Bubble Tea) for stepping through `.http` test plans — the
+`lazyhttp` is a terminal UI (Bubble Tea v2) for stepping through `.http` test plans — the
 IntelliJ HTTP Client / VS Code REST Client format. Open a `.http` file, run requests one
 at a time or in a chain, capture values from responses into variables, and assert on
 responses. The module path is `github.com/wingedsheep/lazyhttp` (note: the repo directory
@@ -23,7 +23,7 @@ go test ./internal/ui/ -run TestLayout   # one test by name
 go vet ./...
 ```
 
-Go 1.24 (pinned via `mise.toml`). Releases are cut by GoReleaser (`.goreleaser.yaml` +
+Go 1.27.1 (pinned via `mise.toml`). Releases are cut by GoReleaser (`.goreleaser.yaml` +
 `.github/workflows/release.yml`) on a tag push, producing prebuilt binaries, a Homebrew
 cask in `wingedsheep/homebrew-tap`, and the `install.sh` curl one-liner.
 
@@ -139,7 +139,7 @@ The data flows in one direction: **parse → expand → execute → evaluate →
   advances to the next step only while the current one's `Result.OK()` holds; the chain
   stops on the first failure or end of plan.
 
-- **Idle-by-design rendering:** the spinner tick loop only runs while a step is in flight
+- **Idle-by-design rendering:** Init queries the terminal background once; the spinner tick loop only runs while a step is in flight
   (`anyRunning()`); an untouched UI performs zero redraws. Display names (`names`) and
   highlighted bodies (`bodyView`) are cached and rebuilt only on load/result/reset, not per
   frame.

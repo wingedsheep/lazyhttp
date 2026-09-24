@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/config"
 	"github.com/wingedsheep/lazyhttp/internal/ui"
@@ -74,9 +74,8 @@ func main() {
 	if info, err := os.Stat(target); err == nil && info.IsDir() {
 		model = ui.NewApp(target, *env)
 	}
-	// AltScreen keeps lazyhttp full-screen; mouse capture means the wheel
-	// scrolls within the TUI instead of the terminal's scrollback.
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// Terminal modes are declared by the root model's View.
+	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

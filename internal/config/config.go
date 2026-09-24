@@ -101,7 +101,9 @@ func (s *TokenStore) load() {
 	if err != nil {
 		return
 	}
-	_ = json.Unmarshal(data, &s.tokens)
+	if err := json.Unmarshal(data, &s.tokens); err != nil || s.tokens == nil {
+		s.tokens = map[string]string{}
+	}
 }
 
 // Get returns the saved refresh token for key, or "" if there is none.

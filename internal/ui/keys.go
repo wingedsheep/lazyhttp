@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/charmbracelet/bubbles/key"
+import "charm.land/bubbles/v2/key"
 
 // keyMap defines every binding. Arrows move (↑/↓ within a pane, ←/→ switch
 // panes), g/G jump to the ends, ctrl+d/u leap a half-page.

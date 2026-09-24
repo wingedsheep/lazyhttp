@@ -1,38 +1,38 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // theme groups every colour the UI uses, so retheming is a one-stop edit.
-// Every colour is an AdaptiveColor pair — Catppuccin Mocha on dark terminals,
-// Catppuccin Latte on light ones — so the UI stays legible either way.
+// Catppuccin resolves to Mocha or Latte when the terminal reports its background.
 type theme struct {
-	accent  lipgloss.AdaptiveColor // mauve  — focus, cursor, headers
-	blue    lipgloss.AdaptiveColor // GET requests / JSON keys
-	teal    lipgloss.AdaptiveColor // shell steps / JSON literals
-	success lipgloss.AdaptiveColor // green  — 2xx, passing checks, POST
-	warning lipgloss.AdaptiveColor // peach  — 3xx, PUT/PATCH, numbers
-	danger  lipgloss.AdaptiveColor // red    — 4xx/5xx, failures, DELETE
-	fg      lipgloss.AdaptiveColor // primary text
-	subtle  lipgloss.AdaptiveColor // dim / secondary text
-	border  lipgloss.AdaptiveColor // unfocused pane borders
-	selBg   lipgloss.AdaptiveColor // selected-row background
-	crust   lipgloss.AdaptiveColor // status-bar background
+	accent  color.Color // mauve  — focus, cursor, headers
+	blue    color.Color // GET requests / JSON keys
+	teal    color.Color // shell steps / JSON literals
+	success color.Color // green  — 2xx, passing checks, POST
+	warning color.Color // peach  — 3xx, PUT/PATCH, numbers
+	danger  color.Color // red    — 4xx/5xx, failures, DELETE
+	fg      color.Color // primary text
+	subtle  color.Color // dim / secondary text
+	border  color.Color // unfocused pane borders
+	selBg   color.Color // selected-row background
+	crust   color.Color // status-bar background
 }
 
 // adaptive is a tiny constructor so a palette reads as Dark/Light pairs.
-func adaptive(dark, light string) lipgloss.AdaptiveColor {
-	return lipgloss.AdaptiveColor{Dark: dark, Light: light}
+func adaptive(dark, light string) color.Color {
+	return lipgloss.LightDark(darkBackground)(lipgloss.Color(light), lipgloss.Color(dark))
 }
 
 // mono builds a palette whose colours don't adapt to the terminal background;
 // the themes designed for a single (dark) scheme use it so every field is one
 // value. Arguments are in the same order as the theme struct fields.
 func mono(accent, blue, teal, success, warning, danger, fg, subtle, border, selBg, crust string) theme {
-	m := func(c string) lipgloss.AdaptiveColor { return lipgloss.AdaptiveColor{Dark: c, Light: c} }
+	m := lipgloss.Color
 	return theme{
 		accent: m(accent), blue: m(blue), teal: m(teal), success: m(success),
 		warning: m(warning), danger: m(danger), fg: m(fg), subtle: m(subtle),
@@ -40,20 +40,24 @@ func mono(accent, blue, teal, success, warning, danger, fg, subtle, border, selB
 	}
 }
 
-// catppuccin pairs Catppuccin Mocha (dark) with Catppuccin Latte (light) — the
-// only theme that adapts to the terminal background.
-var catppuccin = theme{
-	accent:  adaptive("#cba6f7", "#8839ef"), // mauve
-	blue:    adaptive("#89b4fa", "#1e66f5"),
-	teal:    adaptive("#94e2d5", "#179299"),
-	success: adaptive("#a6e3a1", "#40a02b"), // green
-	warning: adaptive("#fab387", "#fe640b"), // peach
-	danger:  adaptive("#f38ba8", "#d20f39"), // red
-	fg:      adaptive("#cdd6f4", "#4c4f69"), // text
-	subtle:  adaptive("#7f849c", "#8c8fa1"), // overlay1
-	border:  adaptive("#45475a", "#bcc0cc"), // surface1
-	selBg:   adaptive("#313244", "#ccd0da"), // surface0
-	crust:   adaptive("#181825", "#dce0e8"), // mantle / crust
+// Default to dark until Bubble Tea reports the terminal background.
+var darkBackground = true
+
+// catppuccin pairs Catppuccin Mocha (dark) with Catppuccin Latte (light).
+func catppuccin() theme {
+	return theme{
+		accent:  adaptive("#cba6f7", "#8839ef"), // mauve
+		blue:    adaptive("#89b4fa", "#1e66f5"),
+		teal:    adaptive("#94e2d5", "#179299"),
+		success: adaptive("#a6e3a1", "#40a02b"), // green
+		warning: adaptive("#fab387", "#fe640b"), // peach
+		danger:  adaptive("#f38ba8", "#d20f39"), // red
+		fg:      adaptive("#cdd6f4", "#4c4f69"), // text
+		subtle:  adaptive("#7f849c", "#8c8fa1"), // overlay1
+		border:  adaptive("#45475a", "#bcc0cc"), // surface1
+		selBg:   adaptive("#313244", "#ccd0da"), // surface0
+		crust:   adaptive("#181825", "#dce0e8"), // mantle / crust
+	}
 }
 
 /*                    accent     blue       teal       success    warning    danger     fg         subtle     border     selBg      crust */
@@ -71,7 +75,7 @@ type namedTheme struct {
 // themes is the ordered set the theme key cycles through; the first entry is
 // the startup default.
 var themes = []namedTheme{
-	{"Catppuccin", catppuccin},
+	{"Catppuccin", catppuccin()},
 	{"Dracula", dracula},
 	{"Nord", nord},
 	{"Gruvbox", gruvbox},
@@ -153,7 +157,7 @@ func newStyles() styles {
 
 // cell builds a per-row segment style. When sel is true it paints the selected
 // background so a whole highlighted row stays gap-free across coloured segments.
-func cell(fg lipgloss.TerminalColor, sel, bold bool) lipgloss.Style {
+func cell(fg color.Color, sel, bold bool) lipgloss.Style {
 	s := lipgloss.NewStyle().Foreground(fg)
 	if bold {
 		s = s.Bold(true)
@@ -165,6 +169,7 @@ func cell(fg lipgloss.TerminalColor, sel, bold bool) lipgloss.Style {
 }
 
 // pane returns a bordered container whose border colour signals focus.
+// w includes padding, h is content height; v2 sizes include the border too.
 func pane(focused bool, w, h int) lipgloss.Style {
 	border := palette.border
 	if focused {
@@ -173,12 +178,12 @@ func pane(focused bool, w, h int) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(border).
-		Width(w).Height(h).
+		Width(w+2).Height(h+2).
 		Padding(0, 1)
 }
 
 // methodColor maps an HTTP verb to its badge colour (httpie-style).
-func methodColor(method string) lipgloss.TerminalColor {
+func methodColor(method string) color.Color {
 	switch strings.ToUpper(method) {
 	case "GET", "HEAD":
 		return palette.blue
@@ -194,7 +199,7 @@ func methodColor(method string) lipgloss.TerminalColor {
 }
 
 // statusColor maps an HTTP status code (or shell exit code) to a colour.
-func statusColor(code int, isHTTP bool) lipgloss.TerminalColor {
+func statusColor(code int, isHTTP bool) color.Color {
 	if isHTTP {
 		switch {
 		case code >= 200 && code < 300:
@@ -209,4 +214,11 @@ func statusColor(code int, isHTTP bool) lipgloss.TerminalColor {
 		return palette.success
 	}
 	return palette.danger
+}
+
+// setBackground resolves adaptive colors without blocking terminal I/O.
+func setBackground(dark bool) {
+	darkBackground = dark
+	themes[0].palette = catppuccin()
+	applyTheme(activeTheme)
 }

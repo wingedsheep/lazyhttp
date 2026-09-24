@@ -134,3 +134,24 @@ func TestRunCommandFilter(t *testing.T) {
 		t.Errorf("summary should count only the run step:\n%s", out.String())
 	}
 }
+
+type failedWriter struct{}
+
+func (failedWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestRunCommandReportWriteFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	path := writePlan(t, srv.URL, "GET {{host}}\n")
+	for _, format := range []string{"pretty", "json", "junit"} {
+		t.Run(format, func(t *testing.T) {
+			var diagnostic strings.Builder
+			if got := runCommand([]string{"--quiet", "-o", format, path}, failedWriter{}, &diagnostic); got != 1 {
+				t.Fatalf("exit = %d, want 1", got)
+			}
+			if !strings.Contains(diagnostic.String(), "write report:") {
+				t.Fatalf("missing write diagnostic: %s", diagnostic.String())
+			}
+		})
+	}
+}

@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -64,19 +65,9 @@ func doHTTP(s step.Step, auth AuthResolver) step.Result {
 		}
 	}
 
-	var bodyReader io.Reader
-	if s.Body != "" {
-		bodyReader = strings.NewReader(s.Body)
-	}
-	req, err := http.NewRequest(s.Method, s.URL, bodyReader)
+	req, err := newRequest(context.Background(), s)
 	if err != nil {
 		return fail(err)
-	}
-	for k, v := range s.Headers {
-		if strings.EqualFold(k, "Authorization") {
-			v = encodeBasicAuth(v)
-		}
-		req.Header.Set(k, v)
 	}
 
 	resp, err := clientFor(s).Do(req)
@@ -112,4 +103,28 @@ func doHTTP(s step.Step, auth AuthResolver) step.Result {
 		Duration:   time.Since(start),
 		NoRedirect: s.NoRedirect,
 	}
+}
+
+// newRequest shares request construction between buffered and streaming execution.
+func newRequest(ctx context.Context, s step.Step) (*http.Request, error) {
+	var bodyReader io.Reader
+	if s.Body != "" {
+		bodyReader = strings.NewReader(s.Body)
+	}
+	req, err := http.NewRequestWithContext(ctx, s.Method, s.URL, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range s.Headers {
+		if strings.EqualFold(k, "Host") {
+			req.Host = v
+			continue
+		}
+		if strings.EqualFold(k, "Authorization") {
+			v = encodeBasicAuth(v)
+		}
+		req.Header.Set(k, v)
+	}
+
+	return req, nil
 }

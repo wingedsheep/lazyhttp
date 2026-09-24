@@ -2,12 +2,13 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/httpfile"
 )
@@ -130,7 +131,7 @@ func (b *browser) layout() {
 	if b.width == 0 {
 		return
 	}
-	b.help.Width = b.width
+	b.help.SetWidth(b.width)
 	footerH := strings.Count(b.help.View(b.keys), "\n") + 1
 	contentH := b.height - 1 /*status bar*/ - footerH - 2 /*pane borders*/
 	b.contentH = max(contentH, 3)
@@ -138,13 +139,18 @@ func (b *browser) layout() {
 
 func (b browser) Update(msg tea.Msg) (browser, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.PasteMsg:
+		if b.filtering {
+			return b.filterKey(tea.KeyPressMsg{Text: singleLine(msg.Content)})
+		}
+		return b, nil
 	case tea.WindowSizeMsg:
 		b.width, b.height = msg.Width, msg.Height
 		b.layout()
 		return b, nil
 	case tea.MouseMsg:
 		return b.onMouse(msg)
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return b.onKey(msg)
 	}
 	return b, nil
@@ -153,18 +159,18 @@ func (b browser) Update(msg tea.Msg) (browser, tea.Cmd) {
 // onMouse moves the cursor with the scroll wheel, one step per physical notch
 // (matching the step list — both share wheelScroll).
 func (b browser) onMouse(msg tea.MouseMsg) (browser, tea.Cmd) {
-	wheelScroll(msg.Button, &b.wheelAccum, b.moveCursor)
+	wheelScroll(msg.Mouse().Button, &b.wheelAccum, b.moveCursor)
 	return b, nil
 }
 
-func (b browser) onKey(msg tea.KeyMsg) (browser, tea.Cmd) {
+func (b browser) onKey(msg tea.KeyPressMsg) (browser, tea.Cmd) {
 	if b.filtering {
 		return b.filterKey(msg)
 	}
 	switch {
 	case key.Matches(msg, b.keys.Quit):
 		return b, tea.Quit
-	case msg.Type == tea.KeyEsc:
+	case msg.Code == tea.KeyEscape:
 		if b.filter != "" {
 			b.filter = ""
 			b.snapCursor()
@@ -206,32 +212,32 @@ func (b browser) onKey(msg tea.KeyMsg) (browser, tea.Cmd) {
 
 // filterKey edits the live filter query, mirroring the step list: most keys
 // append/erase, Esc clears, Enter applies, and the arrows still move the cursor.
-func (b browser) filterKey(msg tea.KeyMsg) (browser, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC:
+func (b browser) filterKey(msg tea.KeyPressMsg) (browser, tea.Cmd) {
+	switch {
+	case msg.String() == "ctrl+c":
 		return b, tea.Quit
-	case tea.KeyEsc:
+	case msg.Code == tea.KeyEscape:
 		b.filtering = false
 		b.filter = ""
 		b.snapCursor()
 		return b, nil
-	case tea.KeyEnter:
+	case msg.Code == tea.KeyEnter:
 		b.filtering = false
 		return b, nil
-	case tea.KeyUp:
+	case msg.Code == tea.KeyUp:
 		b.moveCursor(-1)
 		return b, nil
-	case tea.KeyDown:
+	case msg.Code == tea.KeyDown:
 		b.moveCursor(1)
 		return b, nil
-	case tea.KeyBackspace:
+	case msg.Code == tea.KeyBackspace:
 		if r := []rune(b.filter); len(r) > 0 {
 			b.filter = string(r[:len(r)-1])
 		}
-	case tea.KeySpace:
+	case msg.Code == tea.KeySpace:
 		b.filter += " "
-	case tea.KeyRunes:
-		b.filter += string(msg.Runes)
+	case msg.Text != "":
+		b.filter += msg.Text
 	default:
 		return b, nil
 	}
@@ -505,7 +511,7 @@ func (b browser) renderRow(row browseRow, innerW int) string {
 	}
 
 	sel := row.fileIdx == b.cursor
-	caret, caretColor := " ", lipgloss.TerminalColor(palette.subtle)
+	caret, caretColor := " ", color.Color(palette.subtle)
 	if sel {
 		caret, caretColor = "▸", palette.accent
 	}

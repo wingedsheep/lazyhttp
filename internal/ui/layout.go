@@ -8,7 +8,7 @@ func (m *Model) layout() {
 	if m.width == 0 {
 		return
 	}
-	m.help.Width = m.width
+	m.help.SetWidth(m.width)
 	footerH := strings.Count(m.help.View(m.keys), "\n") + 1
 	if m.notice != "" {
 		footerH++ // the notice line sits above the help footer
@@ -21,7 +21,7 @@ func (m *Model) layout() {
 	// Give the step list ~50% of the width (more room for long descriptions),
 	// but keep it within sensible bounds so the result pane stays usable.
 	listW := clamp(m.width*50/100-4, 28, 92)
-	resultW := m.width - (listW + 4) - 4
+	resultW := m.width - (listW + 2) - 2
 	resultW = max(resultW, 20)
 
 	m.listW, m.resultW, m.contentH = listW, resultW, contentH
@@ -31,6 +31,6 @@ func (m *Model) layout() {
 	// the underline drawn by paneHeader's bottom border. Counting it as one row
 	// made the result pane a line taller than the list, pushing the whole View
 	// past the terminal height so the status bar scrolled off the top.
-	m.viewport.Width = max(resultW-2, 1)
-	m.viewport.Height = max(contentH-2, 1)
+	m.viewport.SetWidth(max(resultW-2, 1))
+	m.viewport.SetHeight(max(contentH-2, 1))
 }

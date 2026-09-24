@@ -43,7 +43,7 @@ it, and put `lazyhttp.exe` on your `PATH`. See the
 [Windows notes](docs/http-format.md#windows-notes) for the default `@shell`
 interpreter and CRLF handling.
 
-### go install (any OS with Go 1.24+)
+### go install (any OS with Go 1.27.1+)
 
 ```sh
 go install github.com/wingedsheep/lazyhttp@latest
@@ -56,7 +56,7 @@ This drops `lazyhttp` in your Go bin dir — make sure it's on your `PATH`:
 export PATH="$PATH:$(go env GOPATH)/bin"
 ```
 
-> **Don't have Go?** On macOS: `brew install go`. Or with mise: `mise use -g go@1.24`.
+> **Don't have Go?** On macOS: `brew install go`. Or with mise: `mise use -g go@1.27.1`.
 
 ## Usage
 

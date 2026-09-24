@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 )
 
 // envNotice builds the load-time diagnostic for the env line: a parse error
@@ -30,12 +30,12 @@ func (m Model) envNotice() string {
 // envKey drives the environment picker: the motion keys move the highlight,
 // Enter switches to the chosen environment (reloading the plan against its
 // variables), and Esc dismisses it without changing anything.
-func (m Model) envKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) envKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	opts := m.envOptions()
 	switch {
-	case msg.Type == tea.KeyCtrlC:
+	case msg.String() == "ctrl+c":
 		return m, tea.Quit
-	case msg.Type == tea.KeyEsc:
+	case msg.Code == tea.KeyEscape:
 		m.envPicking = false
 		return m, nil
 	case key.Matches(msg, m.keys.Up):

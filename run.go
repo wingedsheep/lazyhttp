@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -119,13 +120,20 @@ func runCommand(args []string, out, errOut io.Writer) int {
 	plan.Run(context.Background(), include)
 	rep := buildReport(plan, include, eligible)
 
+	// Buffering retains write errors from every renderer, including fmt calls.
+	reportOut := bufio.NewWriter(out)
 	switch output {
 	case "json":
-		writeJSON(out, rep)
+		writeJSON(reportOut, rep)
 	case "junit":
-		writeJUnit(out, rep, fs.Arg(0))
+		writeJUnit(reportOut, rep, fs.Arg(0))
 	default:
-		writePretty(out, rep, *quiet, useColor(out))
+		writePretty(reportOut, rep, *quiet, useColor(out))
+	}
+
+	if err := reportOut.Flush(); err != nil {
+		fmt.Fprintln(errOut, "write report:", err)
+		return 1
 	}
 
 	if rep.Failed > 0 {

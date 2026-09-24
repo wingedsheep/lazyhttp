@@ -1,10 +1,11 @@
 package ui
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // view.go holds the window chrome: the root View, the status bar and its
@@ -12,7 +13,17 @@ import (
 // panes it frames are rendered in view_list.go (the step list) and
 // view_result.go (the response); layout.go sizes them.
 
-func (m Model) View() string {
+func (m Model) View() tea.View { return terminalView(m.render()) }
+
+// terminalView keeps terminal modes consistent across every screen and modal.
+func terminalView(content string) tea.View {
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
+}
+
+func (m Model) render() string {
 	if m.loadErr != nil {
 		title := lipgloss.NewStyle().Foreground(palette.danger).Bold(true).
 			Render("✗ Could not load " + m.path)

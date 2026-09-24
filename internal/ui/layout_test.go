@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/exec"
 	"github.com/wingedsheep/lazyhttp/internal/step"
@@ -27,9 +27,9 @@ func TestLayoutFitsWidth(t *testing.T) {
 		model, _ = model.Update(exec.ResultMsg{Index: 0, Result: step.Result{
 			Status: step.Done, StatusCode: 200, Body: `{"id":42,"ok":true,"name":"Ada"}`,
 		}})
-		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 
-		stripped := ansiRe.ReplaceAllString(model.View(), "")
+		stripped := ansiRe.ReplaceAllString(model.View().Content, "")
 		for n, line := range strings.Split(stripped, "\n") {
 			if got := len([]rune(line)); got > w {
 				t.Errorf("width %d: line %d is %d cols (wraps): %q", w, n, got, line)
@@ -51,11 +51,11 @@ func TestLayoutFitsHeight(t *testing.T) {
 			Status: step.Done, StatusCode: 200, Body: `{"id":42,"ok":true,"name":"Ada"}`,
 		}})
 
-		if got := strings.Count(model.View(), "\n") + 1; got > h {
+		if got := strings.Count(model.View().Content, "\n") + 1; got > h {
 			t.Errorf("height %d: View is %d lines, exceeds terminal (status bar scrolls off)", h, got)
 		}
 		// The status bar must survive in the rendered frame.
-		if !strings.Contains(model.View(), "lazyhttp") {
+		if !strings.Contains(model.View().Content, "lazyhttp") {
 			t.Errorf("height %d: status bar (lazyhttp) missing from View", h)
 		}
 	}
@@ -84,13 +84,10 @@ func TestRunningRowWidth(t *testing.T) {
 	}
 }
 
-// TestSpinnerIdle verifies the UI performs no work when nothing is running:
-// Init issues no command, and a stray spinner tick does not re-arm the loop.
+// TestSpinnerIdle verifies a stray spinner tick does not re-arm the loop.
+// Init only requests the terminal background once.
 func TestSpinnerIdle(t *testing.T) {
 	m := New(filepath.Join("..", "..", "example.http"), "dev")
-	if m.Init() != nil {
-		t.Error("Init should be idle (nil cmd) when no step is running")
-	}
 	var model tea.Model = m
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	if _, cmd := model.Update(spinner.TickMsg{}); cmd != nil {

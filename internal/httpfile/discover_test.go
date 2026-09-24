@@ -76,3 +76,10 @@ func TestCountSteps(t *testing.T) {
 		t.Errorf("CountSteps(missing) = %d, want -1", n)
 	}
 }
+
+func TestDiscoverPlansMissingRoot(t *testing.T) {
+	idx := DiscoverPlans(filepath.Join(t.TempDir(), "missing"))
+	if !os.IsNotExist(idx.Err) {
+		t.Fatalf("expected missing-root error, got %v", idx.Err)
+	}
+}

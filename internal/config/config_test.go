@@ -13,6 +13,7 @@ import (
 func TestTokenStoreRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	t.Setenv("APPDATA", dir) // Windows
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
 	s := NewTokenStore()
@@ -59,6 +60,7 @@ func TestTokenStoreRoundTrip(t *testing.T) {
 func TestRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)            // macOS: ~/Library/Application Support
+	t.Setenv("APPDATA", dir)         // Windows
 	t.Setenv("XDG_CONFIG_HOME", dir) // Linux: $XDG_CONFIG_HOME
 
 	if got := Load(); got.Theme != "" {
@@ -70,5 +72,34 @@ func TestRoundTrip(t *testing.T) {
 	}
 	if got := Load(); got.Theme != "Dracula" {
 		t.Fatalf("Load() after Save() = %q, want %q", got.Theme, "Dracula")
+	}
+}
+
+func TestTokenStoreInvalidData(t *testing.T) {
+	for _, data := range []string{"null", `{"stale":"token","invalid":42}`, "{"} {
+		t.Run(data, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("HOME", dir)
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			t.Setenv("APPDATA", dir)
+			p, err := tokensPath()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s := NewTokenStore()
+			if got := s.Get("stale"); got != "" {
+				t.Fatalf("malformed store retained partial data: %q", got)
+			}
+			s.Put("key", "fresh")
+			if got := NewTokenStore().Get("key"); got != "fresh" {
+				t.Fatalf("store did not recover: %q", got)
+			}
+		})
 	}
 }

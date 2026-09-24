@@ -3,6 +3,7 @@ package exec
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -10,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/wingedsheep/lazyhttp/internal/step"
 )
@@ -456,5 +457,27 @@ func TestRunStreamThroughStopKeepsResult(t *testing.T) {
 	}
 	if res.Result.Status == step.Failed {
 		t.Errorf("a graceful stop should not fail the step: %v", res.Result.Err)
+	}
+}
+
+func TestPumpCancelWithoutConsumer(t *testing.T) {
+	// An unbuffered queue guarantees the pump needs cancellation to finish.
+	for _, body := range []string{"chunk", ""} {
+		t.Run(body, func(t *testing.T) {
+			events := make(chan streamEvent)
+			gone := make(chan struct{})
+			finished := make(chan struct{})
+			resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}
+			go func() {
+				pump(resp, step.Step{}, time.Now(), events, gone)
+				close(finished)
+			}()
+			close(gone)
+			select {
+			case <-finished:
+			case <-time.After(3 * time.Second):
+				t.Fatal("cancelled pump blocked without a consumer")
+			}
+		})
 	}
 }
