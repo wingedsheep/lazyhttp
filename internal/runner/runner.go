@@ -101,6 +101,12 @@ type Plan struct {
 	// nil. It must not block: Run calls it inline on the run goroutine.
 	OnStepStart func(i int)
 
+	// OnStepDone receives every attempted step, including expansion failures,
+	// after evaluation and before @reset clears live state. s contains the
+	// expanded request and its pre-execution display name. Called synchronously;
+	// consumers can retain a report without retaining response bodies.
+	OnStepDone func(i int, s step.Step, result step.Result)
+
 	// bodyFileCache memoizes `< file` / `<@ file` body reads keyed by absolute
 	// path. Expand runs on every preview, and the TUI re-expands the selected
 	// step on each cursor arrival, so a large body file would otherwise be
@@ -183,23 +189,25 @@ func (p *Plan) Run(ctx context.Context, include func(i int) bool) ([]step.Result
 		if p.OnStepStart != nil {
 			p.OnStepStart(i)
 		}
+		name := p.Label(i)
 		s, err := p.Expand(p.Steps[i])
-		if err != nil {
-			// A body-file read failure fails the step like a transport error.
-			p.Results[i] = step.Result{Status: step.Failed, Err: err}
-			break
-		}
-		// A variable that never resolved would send a literal "{{var}}" — fail
-		// the step with a clear message rather than firing a broken request.
-		if s.Kind == step.KindHTTP {
+		s.Name = name
+		// Validate before dispatch so expansion errors never send a request.
+		if err == nil && s.Kind == step.KindHTTP {
 			if missing := Unresolved(s); len(missing) > 0 {
-				p.Results[i] = step.Result{Status: step.Failed,
-					Err: UnresolvedError(missing, "not defined in the selected environment or @vars")}
-				break
+				err = UnresolvedError(missing, "not defined in the selected environment or @vars")
 			}
 		}
-		res := p.Evaluate(i, exec.Do(s, p.AuthResolver(s)))
+		var res step.Result
+		if err != nil {
+			res = step.Result{Status: step.Failed, Err: err}
+		} else {
+			res = p.Evaluate(i, exec.Do(s, p.AuthResolver(s)))
+		}
 		p.Results[i] = res
+		if p.OnStepDone != nil {
+			p.OnStepDone(i, s, res)
+		}
 		if p.Steps[i].Reset && res.OK() {
 			p.Reset(i)
 		}

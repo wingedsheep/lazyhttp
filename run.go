@@ -117,8 +117,20 @@ func runCommand(args []string, out, errOut io.Writer) int {
 		}
 	}
 
+	// Capture history before @reset or later captures mutate live plan state.
+	rep := runReport{OK: true, NotRun: eligible}
+	plan.OnStepDone = func(_ int, s step.Step, r step.Result) {
+		sr := buildStepReport(s, r)
+		rep.Steps = append(rep.Steps, sr)
+		rep.NotRun--
+		if sr.OK {
+			rep.Passed++
+		} else {
+			rep.Failed++
+			rep.OK = false
+		}
+	}
 	plan.Run(context.Background(), include)
-	rep := buildReport(plan, include, eligible)
 
 	// Buffering retains write errors from every renderer, including fmt calls.
 	reportOut := bufio.NewWriter(out)
@@ -150,11 +162,14 @@ func matcher(plan *runner.Plan, filter string) func(i int) bool {
 	if q == "" {
 		return nil
 	}
-	return func(i int) bool {
-		s := plan.Steps[i]
+	// Freeze selection before execution so captures cannot change which steps
+	// match after the progress total has already been calculated.
+	selected := make([]bool, len(plan.Steps))
+	for i, s := range plan.Steps {
 		hay := strings.ToLower(s.Method + " " + plan.Label(i) + " " + s.Group)
-		return strings.Contains(hay, q)
+		selected[i] = strings.Contains(hay, q)
 	}
+	return func(i int) bool { return selected[i] }
 }
 
 // countEligible returns how many steps were eligible to run: every step when
@@ -172,39 +187,10 @@ func countEligible(plan *runner.Plan, include func(i int) bool) int {
 	return n
 }
 
-// buildReport collects the outcome of every step that ran into a runReport.
-// Steps the filter excluded, and steps left Pending after the chain stopped on a
-// failure, are not counted; NotRun records how many of the eligible steps never
-// executed because of an earlier failure.
-func buildReport(plan *runner.Plan, include func(i int) bool, eligible int) runReport {
-	var rep runReport
-	ran := 0
-	for i := range plan.Steps {
-		if include != nil && !include(i) {
-			continue
-		}
-		r := plan.Results[i]
-		if r.Status == step.Pending {
-			continue
-		}
-		ran++
-		sr := buildStepReport(plan, i, r)
-		if sr.OK {
-			rep.Passed++
-		} else {
-			rep.Failed++
-		}
-		rep.Steps = append(rep.Steps, sr)
-	}
-	rep.NotRun = eligible - ran
-	rep.OK = rep.Failed == 0
-	return rep
-}
-
-func buildStepReport(plan *runner.Plan, i int, r step.Result) stepReport {
-	s := plan.Steps[i]
+// buildStepReport snapshots a completed step using its execution-time request.
+func buildStepReport(s step.Step, r step.Result) stepReport {
 	sr := stepReport{
-		Name:       plan.Label(i),
+		Name:       s.Name,
 		OK:         r.OK(),
 		DurationMs: r.Duration.Round(time.Millisecond).Milliseconds(),
 	}
@@ -219,9 +205,7 @@ func buildStepReport(plan *runner.Plan, i int, r step.Result) stepReport {
 		sr.Status = fmt.Sprintf("exit %d", r.ExitCode)
 	default:
 		sr.Kind, sr.Method = "http", s.Method
-		// Best-effort expansion for display; after a @reset, captured {{vars}} in
-		// the URL may no longer resolve and are left as-is.
-		sr.URL = plan.Vars.Expand(s.URL)
+		sr.URL = s.URL
 		sr.StatusCode = r.StatusCode
 		sr.Status = httpStatus(r.StatusCode)
 	}

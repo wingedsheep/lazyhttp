@@ -113,6 +113,9 @@ lazyhttp run -o junit example.http > report.xml   # JUnit XML for CI test report
 The chain stops at the first failing step, mirroring "run from here" in the TUI.
 `--output` (alias `-o`) is `pretty` (default, coloured on a TTY), `json`, or `junit`;
 the report goes to stdout and diagnostics to stderr, so redirection stays clean.
+Reports retain every completed step, even when `@reset` clears the plan's live
+state, and record names and URLs as expanded for execution. Filter selection is
+fixed before the run begins; captured variables do not change which steps match.
 
 A GitHub Actions step:
 

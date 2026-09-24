@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"encoding/xml"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -153,5 +155,117 @@ func TestRunCommandReportWriteFailure(t *testing.T) {
 				t.Fatalf("missing write diagnostic: %s", diagnostic.String())
 			}
 		})
+	}
+}
+
+func TestRunCommandPreservesHistoryAcrossReset(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"next":"changed"}`)
+	}))
+	defer srv.Close()
+	path := writePlan(t, srv.URL, `@target = original
+###
+# @name Request {{target}}
+# @capture target = json.next
+# @assert status == 200
+GET {{host}}/{{target}}
+###
+# @name Reset
+# @reset
+POST {{host}}/reset
+###
+# @name Fail
+# @assert status == 201
+GET {{host}}/{{target}}
+###
+# @name Skipped
+GET {{host}}/skipped
+`)
+	for _, format := range []string{"json", "junit", "pretty"} {
+		t.Run(format, func(t *testing.T) {
+			var out strings.Builder
+			if code := runCommand([]string{"-o", format, path}, &out, io.Discard); code != 1 {
+				t.Fatalf("exit = %d, want 1", code)
+			}
+			switch format {
+			case "json":
+				var rep runReport
+				if err := json.Unmarshal([]byte(out.String()), &rep); err != nil {
+					t.Fatal(err)
+				}
+				if rep.OK || rep.Passed != 2 || rep.Failed != 1 || rep.NotRun != 1 || len(rep.Steps) != 3 {
+					t.Fatalf("incorrect history: %+v", rep)
+				}
+				first := rep.Steps[0]
+				if first.Name != "Request original" || first.URL != srv.URL+"/original" || first.Captures["target"] != "changed" || len(first.Asserts) != 1 || !first.Asserts[0].Pass {
+					t.Fatalf("lost execution-time values: %+v", first)
+				}
+				if rep.Steps[2].URL != srv.URL+"/original" {
+					t.Fatalf("reset did not restore variables: %+v", rep.Steps[2])
+				}
+			case "junit":
+				var rep junitSuites
+				if err := xml.Unmarshal([]byte(out.String()), &rep); err != nil {
+					t.Fatal(err)
+				}
+				if rep.Tests != 3 || rep.Failures != 1 || rep.Suites[0].Cases[0].Name != "GET Request original" {
+					t.Fatalf("incorrect history: %+v", rep)
+				}
+			case "pretty":
+				if !strings.Contains(out.String(), "Request original") || !strings.Contains(out.String(), "2 passed, 1 failed, 1 not run") {
+					t.Fatalf("incorrect history: %s", out.String())
+				}
+			}
+		})
+	}
+}
+
+func TestRunCommandReportsExpansionFailures(t *testing.T) {
+	for _, request := range []string{"GET {{missing}}/test", "POST http://unused.invalid\n\n< missing-body.json"} {
+		t.Run(request, func(t *testing.T) {
+			path := writePlan(t, "", request)
+			var out strings.Builder
+			if code := runCommand([]string{"-o", "json", path}, &out, io.Discard); code != 1 {
+				t.Fatalf("exit = %d", code)
+			}
+			var rep runReport
+			if err := json.Unmarshal([]byte(out.String()), &rep); err != nil {
+				t.Fatal(err)
+			}
+			if rep.Failed != 1 || rep.NotRun != 0 || len(rep.Steps) != 1 || rep.Steps[0].Error == "" {
+				t.Fatalf("missing failed attempt: %+v", rep)
+			}
+		})
+	}
+}
+
+func TestRunCommandFilterStableAcrossCaptures(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "changed")
+	}))
+	defer srv.Close()
+	path := writePlan(t, srv.URL, `@label = keep
+###
+# @name keep first
+# @capture label = body
+GET {{host}}/first
+###
+# @name {{label}} second
+GET {{host}}/second
+`)
+	var out strings.Builder
+	if code := runCommand([]string{"--filter", "keep", "-o", "json", path}, &out, io.Discard); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	var rep runReport
+	if err := json.Unmarshal([]byte(out.String()), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if rep.Passed != 2 || rep.NotRun != 0 || len(rep.Steps) != 2 {
+		t.Fatalf("filter changed during run: %+v", rep)
+	}
+	if rep.Steps[1].Name != "changed second" {
+		t.Fatalf("name was not captured at execution: %+v", rep.Steps[1])
 	}
 }
